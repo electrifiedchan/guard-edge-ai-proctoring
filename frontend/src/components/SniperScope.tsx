@@ -1,0 +1,314 @@
+"use client";
+
+import { useEffect, useRef, useState, useCallback } from "react";
+import { motion } from "framer-motion";
+
+export interface RiskPacket {
+  candidate_id: string;
+  risk_score: number;
+  violation_count: number;
+  intervention_level: "CLEAR" | "SOFT_WARNING" | "HARD_WARNING" | "TERMINAL";
+}
+
+interface SniperScopeProps {
+  onTelemetryUpdate: (packet: RiskPacket, verdict: string) => void;
+}
+
+export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const loopTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const [isScanning, setIsScanning] = useState(false);
+  const [sysStatus, setSysStatus] = useState<"IDLE" | "ACTIVE" | "COMPROMISED" | "LOCKED">("IDLE");
+  
+  // Telemetry State
+  const [riskScore, setRiskScore] = useState(0);
+  const [violationCount, setViolationCount] = useState(0);
+  const [interventionLevel, setInterventionLevel] = useState("CLEAR");
+  const [latestVerdict, setLatestVerdict] = useState("SYSTEM STANDBY");
+
+  const CANDIDATE_ID = "major_project_candidate_01";
+
+  // --- 1. HARDWARE TRIPWIRE: Virtual Camera Detection ---
+  const checkHardware = async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(d => d.kind === 'videoinput');
+      
+      for (const device of videoDevices) {
+        const label = device.label.toLowerCase();
+        if (label.includes('obs') || label.includes('virtual') || label.includes('snap')) {
+          console.error("🚨 HARDWARE TRIPWIRE: Virtual Camera Detected:", device.label);
+          // In production, this would trigger an instant FATAL lock.
+          // setSysStatus("LOCKED"); 
+        }
+      }
+    } catch (err) {
+      console.error("Hardware scan failed", err);
+    }
+  };
+
+  // --- 2. SOFTWARE TRIPWIRE: Tab Switching (DEV MODE) ---
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      // DEV OVERRIDE: Commented out so you can check your VS Code terminal without triggering a lockout!
+      /*
+      if (document.hidden && isScanning && sysStatus !== "COMPROMISED" && sysStatus !== "LOCKED") {
+        console.error("🛑 SOFTWARE TRIPWIRE TRIGGERED: Browser focus lost.");
+        setIsScanning(false);
+        setSysStatus("LOCKED");
+        setLatestVerdict("FATAL: BROWSER FOCUS LOST. UNAUTHORIZED TAB SWITCH DETECTED.");
+        setRiskScore(100);
+        setInterventionLevel("TERMINAL");
+      }
+      */
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [isScanning, sysStatus]);
+
+  // --- 3. OPTICS INITIALIZATION ---
+  const startCamera = async () => {
+    try {
+      await checkHardware();
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { width: 1280, height: 720, facingMode: "user" } 
+      });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+      setIsScanning(true);
+      setSysStatus("ACTIVE");
+      setLatestVerdict("OPTICS ONLINE. ANALYZING BEHAVIOR...");
+      runInferenceLoop();
+    } catch (err) {
+      console.error("Camera access denied.", err);
+      setSysStatus("COMPROMISED");
+      setLatestVerdict("ERROR: OPTICS UNAVAILABLE. CHECK PERMISSIONS.");
+    }
+  };
+
+  const stopCamera = () => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
+      tracks.forEach(track => track.stop());
+    }
+    if (loopTimerRef.current) clearTimeout(loopTimerRef.current);
+    setIsScanning(false);
+    setSysStatus("IDLE");
+  };
+
+  // --- 4. THE SELF-HEALING ASYNC LOOP ---
+  const runInferenceLoop = useCallback(async () => {
+    if (!videoRef.current || !canvasRef.current || !isScanning) return;
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+
+    if (ctx && video.readyState === 4) {
+      // Zero-Latency Crop: Grab the center 320x320 pixels to save VRAM
+      const cropSize = 320;
+      const startX = (video.videoWidth - cropSize) / 2;
+      const startY = (video.videoHeight - cropSize) / 2;
+
+      canvas.width = cropSize;
+      canvas.height = cropSize;
+      ctx.drawImage(video, startX, startY, cropSize, cropSize, 0, 0, cropSize, cropSize);
+
+      const base64Image = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
+
+      try {
+        const response = await fetch("http://localhost:8080/api/v1/analyze-frame", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            candidate_id: CANDIDATE_ID,
+            timestamp: Date.now(),
+            image_payload: base64Image
+          })
+        });
+
+        const data = await response.json();
+        
+        if (data.risk_packet) {
+          setRiskScore(data.risk_packet.risk_score);
+          setViolationCount(data.risk_packet.violation_count);
+          setInterventionLevel(data.risk_packet.intervention_level);
+          setLatestVerdict(data.verdict);
+
+          // Pass data up to VoiceOrb
+          onTelemetryUpdate(data.risk_packet, data.verdict);
+
+          if (data.risk_packet.intervention_level === "TERMINAL") {
+            setSysStatus("LOCKED");
+            setIsScanning(false);
+            if (loopTimerRef.current) clearTimeout(loopTimerRef.current);
+            return; // Kill the loop permanently
+          }
+        }
+      } catch (error) {
+        console.error("Backend unreachable", error);
+      }
+    }
+
+    // Mathematical timing: exactly 5 seconds (12 FPM)
+    loopTimerRef.current = setTimeout(runInferenceLoop, 5000);
+  }, [isScanning, onTelemetryUpdate]);
+
+  useEffect(() => {
+    if (isScanning) {
+      runInferenceLoop();
+    }
+    return () => {
+      if (loopTimerRef.current) clearTimeout(loopTimerRef.current);
+    };
+  }, [isScanning, runInferenceLoop]);
+
+
+  return (
+    <div className="w-full flex flex-col xl:flex-row gap-8 items-start">
+      
+      {/* LEFT: THE OPTICS FEED */}
+      <div className="relative w-full xl:w-[800px] h-[450px] bg-[#0A0A0B] rounded-xl border border-sentry-border overflow-hidden flex-shrink-0 shadow-2xl">
+        
+        {/* Hidden Canvas for Cropping */}
+        <canvas ref={canvasRef} className="hidden" />
+
+        {/* Video Feed */}
+        <video 
+          ref={videoRef} 
+          autoPlay 
+          playsInline 
+          muted 
+          className={`w-full h-full object-cover transition-opacity duration-700 ${sysStatus === 'LOCKED' ? 'opacity-20 grayscale' : 'opacity-80'}`}
+        />
+
+        {/* Cyberpunk Scanlines */}
+        <div className="absolute inset-0 pointer-events-none bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 mix-blend-overlay" />
+        <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_4px,3px_100%] z-10" />
+
+        {/* UI Overlay */}
+        <div className="absolute top-4 left-4 z-20 flex gap-2">
+          <span className={`px-3 py-1 text-[10px] tracking-widest font-bold border rounded bg-black/50 backdrop-blur-sm
+            ${sysStatus === 'IDLE' ? 'border-gray-500 text-gray-500' : ''}
+            ${sysStatus === 'ACTIVE' ? 'border-sentry-neon text-sentry-neon shadow-[0_0_10px_rgba(0,255,65,0.3)]' : ''}
+            ${sysStatus === 'LOCKED' ? 'border-red-500 text-red-500 shadow-[0_0_10px_rgba(255,0,0,0.5)]' : ''}
+          `}>
+            {sysStatus}
+          </span>
+        </div>
+
+        {/* The Targeting Crosshair */}
+        {sysStatus === 'ACTIVE' && (
+          <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-20">
+            <motion.div 
+              animate={{ rotate: 360 }} 
+              transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
+              className="w-[320px] h-[320px] border border-sentry-neon/30 rounded-full flex items-center justify-center relative"
+            >
+              <div className="absolute w-full h-[1px] bg-sentry-neon/20" />
+              <div className="absolute h-full w-[1px] bg-sentry-neon/20" />
+              <div className="w-[300px] h-[300px] border border-sentry-neon/10 rounded-full" />
+            </motion.div>
+          </div>
+        )}
+
+        {/* Fatal Lockout Overlay */}
+        {sysStatus === 'LOCKED' && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center bg-red-950/40 backdrop-blur-md">
+            <div className="border border-red-500 bg-black/80 p-8 flex flex-col items-center text-center shadow-[0_0_50px_rgba(255,0,0,0.3)]">
+              <span className="text-red-500 text-4xl mb-4">🛡️</span>
+              <h2 className="text-white text-2xl font-black tracking-widest mb-2">SYSTEM SECURED</h2>
+              <p className="text-red-400 text-xs tracking-widest font-mono uppercase">Violation Detected or Focus Lost</p>
+            </div>
+          </div>
+        )}
+
+        {/* Controls */}
+        <div className="absolute bottom-4 right-4 z-20 flex gap-4">
+          {!isScanning && sysStatus !== 'LOCKED' && (
+            <button onClick={startCamera} className="px-6 py-2 bg-sentry-neon text-black font-bold text-xs tracking-widest hover:bg-white transition-colors cursor-pointer">
+              ENGAGE SENTRY
+            </button>
+          )}
+          {isScanning && (
+            <button onClick={stopCamera} className="px-6 py-2 border border-gray-500 text-gray-300 font-bold text-xs tracking-widest hover:bg-gray-800 transition-colors cursor-pointer bg-black/50 backdrop-blur-sm">
+              DISENGAGE
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* RIGHT: THE TELEMETRY STACK */}
+      <div className="flex-1 w-full flex flex-col gap-4">
+        
+        {/* Memory Graph / Risk Score (With react-bits Spotlight logic placeholder) */}
+        <div className="border border-sentry-border bg-[#0A0A0B] p-6 rounded-xl relative overflow-hidden group hover:border-sentry-border/80 transition-colors">
+          <div className="absolute inset-0 bg-gradient-to-br from-white/[0.02] to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+          
+          <h3 className="text-[10px] tracking-widest text-gray-500 mb-6 flex items-center gap-2">
+            <span className="w-1 h-1 bg-gray-500 rounded-full" />
+            BEA TEMPORAL GRAPH
+          </h3>
+          
+          <div className="flex flex-col mb-8">
+            <span className="text-[10px] tracking-widest text-gray-600 mb-2">CUMULATIVE RISK</span>
+            {/* THE GLITCH TEXT INTEGRATION */}
+            <h2 
+              data-text={riskScore === 100 ? "100%" : `${riskScore}%`}
+              className={`text-6xl font-black transition-colors duration-500 ${
+                riskScore === 100 
+                  ? "text-red-500 glitch-text drop-shadow-[0_0_15px_rgba(239,68,68,0.8)]" 
+                  : riskScore >= 40 
+                  ? "text-orange-400 drop-shadow-[0_0_10px_rgba(251,146,60,0.5)]" 
+                  : riskScore >= 20
+                  ? "text-yellow-400"
+                  : "text-white"
+              }`}
+            >
+              {riskScore}%
+            </h2>
+          </div>
+
+          <div className={`p-4 rounded border flex justify-between items-center mb-6 transition-colors duration-500
+            ${interventionLevel === 'TERMINAL' ? 'border-red-500/30 bg-red-500/10 text-red-500' : 
+              interventionLevel === 'HARD_WARNING' ? 'border-orange-500/30 bg-orange-500/10 text-orange-400' : 
+              interventionLevel === 'SOFT_WARNING' ? 'border-yellow-500/30 bg-yellow-500/10 text-yellow-400' : 
+              'border-sentry-border bg-white/5 text-gray-400'}`}
+          >
+            <div className="flex flex-col">
+               <span className="text-[9px] tracking-widest opacity-70 mb-1">INTERVENTION TIER</span>
+               <span className="text-sm font-bold tracking-widest">{interventionLevel}</span>
+            </div>
+            {interventionLevel !== 'CLEAR' && <span className="animate-pulse">⚠️</span>}
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 border-t border-sentry-border pt-4">
+            <div className="flex flex-col">
+               <span className="text-[9px] tracking-widest text-gray-600 mb-1">VIOLATIONS</span>
+               <span className="text-lg font-bold">{violationCount}</span>
+            </div>
+            <div className="flex flex-col">
+               <span className="text-[9px] tracking-widest text-gray-600 mb-1">WINDOW</span>
+               <span className="text-lg font-bold text-gray-400">5m</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Live VLM Inference Log */}
+        <div className="border border-sentry-border bg-[#0A0A0B] p-6 rounded-xl flex flex-col min-h-[120px]">
+           <h3 className="text-[10px] tracking-widest text-gray-500 mb-4 flex items-center gap-2">
+            <span className={`w-2 h-2 rounded-sm ${sysStatus === 'ACTIVE' ? 'bg-sentry-neon animate-pulse' : 'bg-gray-700'}`} />
+            VLM INFERENCE LOG
+          </h3>
+          <p className={`text-xs font-mono leading-relaxed ${latestVerdict.includes('CRITICAL') || latestVerdict.includes('FATAL') ? 'text-red-400' : 'text-gray-400'}`}>
+            &gt; {latestVerdict}
+          </p>
+        </div>
+
+      </div>
+    </div>
+  );
+}
