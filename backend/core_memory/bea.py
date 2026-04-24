@@ -18,10 +18,9 @@ class BehavioralEventAccumulator:
             }
 
     async def trigger_fatal_lockout(self, candidate_id: str) -> dict:
-        """Instantly terminates session (Mobile Phone / Tab Switch)."""
+        """Logs a fatal-level violation silently (Mobile Phone / Tab Switch)."""
         async with self.lock:
             await self._ensure_candidate(candidate_id)
-            self.memory[candidate_id]["is_locked"] = True
             return self._generate_locked_state(candidate_id)
 
     # [ELITE UPGRADE]: Temporal Threshold Logic
@@ -100,13 +99,16 @@ class BehavioralEventAccumulator:
         if recent_burst >= 3:
             risk_score = min(risk_score + 15, 100)
 
+        # Silent Observer: Never lock out, only log severity
+        autopsy_flag = False
         if risk_score >= 100:
-            level = "TERMINAL"
-            self.memory[candidate_id]["is_locked"] = True
+            level = "SEVERE_VIOLATION_LOGGED"
+            autopsy_flag = True
         elif risk_score >= 75:
             level = "HARD_WARNING"
+            autopsy_flag = True
         elif risk_score >= 40:
-            level = "HARD_WARNING"
+            level = "WARNING_LOGGED"
         elif risk_score >= 20:
             level = "SOFT_WARNING"
         else:
@@ -116,7 +118,9 @@ class BehavioralEventAccumulator:
             "candidate_id": candidate_id,
             "risk_score": risk_score,
             "violation_count": count,
-            "intervention_level": level
+            "intervention_level": level,
+            "is_locked": False,
+            "autopsy_flag": autopsy_flag
         }
 
     def _generate_locked_state(self, candidate_id: str) -> dict:
@@ -124,7 +128,9 @@ class BehavioralEventAccumulator:
             "candidate_id": candidate_id,
             "risk_score": 100,
             "violation_count": len(self.memory.get(candidate_id, {}).get("events", [])),
-            "intervention_level": "TERMINAL"
+            "intervention_level": "SEVERE_VIOLATION_LOGGED",
+            "is_locked": False,
+            "autopsy_flag": True
         }
 
     async def reset_candidate(self, candidate_id: str):

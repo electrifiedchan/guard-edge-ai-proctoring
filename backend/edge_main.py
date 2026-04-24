@@ -1,13 +1,19 @@
 import logging
+import traceback
 import json
+import base64
 import httpx
 import sqlite3
+import cv2
+import numpy as np
+from ultralytics import YOLO
 from datetime import datetime
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from core_memory.bea import bea_engine
+import voice_engine
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,19 +30,20 @@ def init_db():
                   is_critical BOOLEAN,
                   risk_score INTEGER,
                   intervention_level TEXT,
-                  ai_logic_trace TEXT)''')
+                  ai_logic_trace TEXT,
+                  image_payload TEXT)''')
     conn.commit()
     conn.close()
     logger.info("🗄️ SQLite Security Database Initialized.")
 
-def log_to_db(candidate_id, gaze, is_critical, risk_score, level, logic_trace):
+def log_to_db(candidate_id, gaze, is_critical, risk_score, level, logic_trace, image_payload=None):
     try:
         conn = sqlite3.connect("sentry_logs.db")
         c = conn.cursor()
         c.execute("""INSERT INTO security_logs 
-                     (candidate_id, timestamp, gaze, is_critical, risk_score, intervention_level, ai_logic_trace) 
-                     VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                  (candidate_id, datetime.now(), gaze, is_critical, risk_score, level, logic_trace))
+                     (candidate_id, timestamp, gaze, is_critical, risk_score, intervention_level, ai_logic_trace, image_payload) 
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                  (candidate_id, datetime.now(), gaze, is_critical, risk_score, level, logic_trace, image_payload))
         conn.commit()
         conn.close()
     except Exception as e:
@@ -46,6 +53,7 @@ def log_to_db(candidate_id, gaze, is_critical, risk_score, level, logic_trace):
 async def lifespan(app: FastAPI):
     logger.info("🛡️  G.U.A.R.D. Engine warming up...")
     init_db() # Boot the database
+    voice_engine.start_voice_loop() # Boot the voice engine
     app.state.http_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
     yield
     await app.state.http_client.aclose()
@@ -57,33 +65,32 @@ app.add_middleware(
 )
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "llama3.2-vision"
-OLLAMA_OPTIONS = {"num_predict": 200, "temperature": 0.0, "num_ctx": 1024, "kv_cache_type": "q8_0"}
+OLLAMA_MODEL = "llama3.1:8b"
+OLLAMA_OPTIONS = {"num_predict": 150, "temperature": 0.0, "num_ctx": 1024}
 
-# The Elite Hallucination-Proof Prompt
+# --- YOLO26s STATE-OF-THE-ART OBJECT DETECTOR ---
+yolo_model = YOLO("yolo26s.pt")
+logger.info("🔫 YOLO26s VLM-Hybrid Object Detector Loaded.")
+
+# The Hybrid Security Logic Prompt (Text-Only LLM)
 SYSTEM_PROMPT = """
-<role>You are a strict, objective computer vision sensor. You lack imagination and rely solely on structural geometric reality.</role>
+<role>You are a security logic engine for an exam proctoring system. You will receive a list of objects detected by a YOLO camera sensor. Evaluate the risk based on these objects.</role>
 
 <rules>
-Rule 1 (GAZE): Determine if the person is looking 'STRAIGHT' (at monitor), 'DOWN' (at keyboard/desk), or 'SIDE_OR_UP' (away).
-Rule 2 (CRITICAL_THREAT): A situation is ONLY critical if a mobile phone or an unauthorized human is 100% clearly visible.
+Rule 1 (GAZE): If the YOLO data mentions face orientation or head pose, determine if 'STRAIGHT', 'DOWN', or 'SIDE_OR_UP'. If no face data, default to 'STRAIGHT'.
+Rule 2 (CRITICAL): A situation is ONLY critical if YOLO detected 'cell phone' OR more than 1 'person'.
+Rule 3 (SAFE): If YOLO detected only 1 person and no cell phone, the situation is safe.
 </rules>
 
-<negative_constraints>
-- DO NOT guess based on linguistic priors. If an object is ambiguous (e.g., a wallet, notebook, shadow, or remote), YOU MUST IGNORE IT.
-- Be cautious of small area ratios. Do not hallucinate objects or people in tiny, noisy background patches.
-- If no distinct features (screen, camera lens, human face) are visible, you must explicitly declare absence.
-</negative_constraints>
-
 <output_format>
-You must reply STRICTLY in JSON. Execute a Perception-Reasoning Decomposition using these exact keys:
+You must reply STRICTLY in JSON. Keep values under 10 words. Use exact keys:
 {
-  "blind_observation": "Phase 1: Neutrally describe the scene, hands, and desk context-free.",
-  "entity_extraction": "Phase 2: Use exact syntax: 'NO TARGETS' if no phone/person is 100% visible. Otherwise, name the target.",
-  "spatial_verification": "Phase 3: If a target is found, describe its exact physical location in the frame. If 'NO TARGETS', output 'N/A'.",
+  "obs": "List the YOLO-detected objects.",
+  "target": "Output 'NONE' if no phone/extra person. Otherwise, name it.",
+  "confidence": "HIGH",
   "gaze": "STRAIGHT", "DOWN", or "SIDE_OR_UP",
-  "is_critical": boolean (true ONLY if entity_extraction is NOT 'NO TARGETS'),
-  "verdict": "Brief 1 sentence summary."
+  "critical": boolean (true ONLY if target is NOT 'NONE'),
+  "verdict": "1 short sentence."
 }
 </output_format>
 """
@@ -91,17 +98,44 @@ You must reply STRICTLY in JSON. Execute a Perception-Reasoning Decomposition us
 class FramePayload(BaseModel):
     candidate_id: str
     timestamp: int
-    image_payload: str  
+    image_base64: str
 
 @app.post("/api/v1/analyze-frame")
 async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks):
     current_state = await bea_engine.get_state(payload.candidate_id)
-    if current_state.get("intervention_level") == "TERMINAL":
-        return {"candidate_id": payload.candidate_id, "timestamp": payload.timestamp, "verdict": "SESSION LOCKED", "risk_packet": current_state}
+    if current_state.get("intervention_level") == "SEVERE_VIOLATION_LOGGED":
+        return {"candidate_id": payload.candidate_id, "timestamp": payload.timestamp, "verdict": "SESSION FLAGGED", "risk_packet": current_state}
 
+    # --- PHASE 1: DECODE BASE64 IMAGE ---
+    raw_b64 = payload.image_base64
+    if "," in raw_b64:
+        raw_b64 = raw_b64.split(",", 1)[1]
+    try:
+        img_bytes = base64.b64decode(raw_b64)
+        img_array = np.frombuffer(img_bytes, dtype=np.uint8)
+        image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+    except Exception as e:
+        logger.error(f"❌ Image decode error: {e}")
+        raise HTTPException(status_code=400, detail="Invalid image payload.")
+
+    # --- PHASE 2: YOLO26s INFERENCE (Deterministic, Zero Hallucination) ---
+    results = yolo_model(image, verbose=False, classes=[0, 67], imgsz=640, augment=True, conf=0.35)
+    detected_objects = []
+    for r in results:
+        for box in r.boxes:
+            cls_id = int(box.cls[0])
+            label = yolo_model.names[cls_id]
+            conf = float(box.conf[0])
+            detected_objects.append(f"{label} ({conf:.0%})")
+
+    yolo_context = f"YOLO Detected Objects: {', '.join(detected_objects) if detected_objects else 'None detected'}"
+    logger.info(f"🔫 {yolo_context}")
+
+    # --- PHASE 3: TEXT-LLM RISK EVALUATION ---
     ollama_payload = {
-        "model": OLLAMA_MODEL, "system": SYSTEM_PROMPT, "prompt": "Analyze this frame and output the required JSON.",
-        "images": [payload.image_payload], "stream": False, "format": "json", "options": OLLAMA_OPTIONS
+        "model": OLLAMA_MODEL, "system": SYSTEM_PROMPT,
+        "prompt": f"Evaluate this frame for exam security violations.\n{yolo_context}",
+        "stream": False, "format": "json", "options": OLLAMA_OPTIONS
     }
 
     try:
@@ -113,27 +147,86 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
         try:
             ai_response = json.loads(raw_response)
         except json.JSONDecodeError:
-            ai_response = {"gaze": "STRAIGHT", "is_critical": False, "verdict": "JSON Error"}
+            ai_response = {"gaze": "STRAIGHT", "critical": False, "verdict": "JSON Error"}
 
+        # Extract the new compressed keys
+        confidence = ai_response.get("confidence", "LOW")
         gaze = ai_response.get("gaze", "STRAIGHT")
-        is_critical = bool(ai_response.get("is_critical", False))
+        is_critical = bool(ai_response.get("critical", False))
         verdict = ai_response.get("verdict", "")
-        logic_trace = ai_response.get("entity_extraction", "")
+        logic_trace = ai_response.get("target", "None")
+
+        # --- THE HALLUCINATION GUARDRAIL ---
+        if is_critical and confidence != "HIGH":
+            logger.warning(f"⚠️ AI Hallucination caught! Overriding low-confidence threat: {logic_trace}")
+            is_critical = False
+            verdict = f"System nominal. Ignored low-confidence object: {logic_trace}"
 
         if is_critical:
             risk_packet = await bea_engine.trigger_fatal_lockout(payload.candidate_id)
         else:
             risk_packet = await bea_engine.record_telemetry(payload.candidate_id, gaze)
 
+        # Extract autopsy flag from BEA temporal graph
+        autopsy_flag = risk_packet.get("autopsy_flag", False)
+
         # 💾 Write to SQLite Database in the background
-        background_tasks.add_task(log_to_db, payload.candidate_id, gaze, is_critical, risk_packet['risk_score'], risk_packet['intervention_level'], logic_trace)
+        evidence_image = payload.image_base64 if autopsy_flag else None
+        background_tasks.add_task(log_to_db, payload.candidate_id, gaze, is_critical, risk_packet['risk_score'], risk_packet['intervention_level'], logic_trace, evidence_image)
         background_tasks.add_task(bea_engine.cleanup_stale_sessions)
+
+        # --- RESTORED TERMINAL LOGS ---
+        logger.info(f"👁️  VERDICT: {verdict}")
+        logger.info(f"🧠  LOGIC TRACE: {logic_trace}")
+        logger.info(f"🎯  GAZE: {gaze} | CRITICAL: {is_critical} | RISK: {risk_packet['risk_score']}% [{risk_packet['intervention_level']}]")
+        logger.info("-" * 50)
 
         return {"candidate_id": payload.candidate_id, "timestamp": payload.timestamp, "verdict": verdict, "gaze": gaze, "risk_packet": risk_packet}
 
     except Exception as e:
-        logger.error(f"❌ Error: {e}")
+        logger.error(f"❌ Ollama Error [{type(e).__name__}]: {str(e)}")
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=503, detail="Edge AI Engine unreachable.")
+
+@app.get("/api/v1/logs")
+async def get_audit_logs():
+    try:
+        conn = sqlite3.connect("sentry_logs.db")
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute('''SELECT id, candidate_id, timestamp, gaze, is_critical, risk_score, intervention_level, ai_logic_trace 
+                     FROM security_logs ORDER BY timestamp DESC LIMIT 50''')
+        rows = c.fetchall()
+        logs = [dict(row) for row in rows]
+        conn.close()
+        return logs
+    except Exception as e:
+        logger.error(f"❌ DB Read Error: {e}")
+        raise HTTPException(status_code=500, detail="Database access error.")
+
+@app.get("/api/v1/autopsy-logs")
+async def get_autopsy_logs():
+    try:
+        conn = sqlite3.connect("sentry_logs.db")
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute('''SELECT id, candidate_id, timestamp, gaze, is_critical, risk_score, 
+                     intervention_level, ai_logic_trace, image_payload 
+                     FROM security_logs 
+                     WHERE image_payload IS NOT NULL 
+                     ORDER BY timestamp DESC''')
+        rows = c.fetchall()
+        logs = [dict(row) for row in rows]
+        conn.close()
+        logger.info(f"📸 Autopsy: Serving {len(logs)} evidence frames.")
+        return logs
+    except Exception as e:
+        logger.error(f"❌ Autopsy DB Read Error: {e}")
+        raise HTTPException(status_code=500, detail="Autopsy database access error.")
+
+@app.get("/api/v1/voice-status")
+async def get_voice_status():
+    return voice_engine.voice_state
 
 @app.get("/api/v1/status/{candidate_id}")
 async def get_candidate_status(candidate_id: str):

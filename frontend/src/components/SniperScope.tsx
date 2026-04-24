@@ -7,7 +7,7 @@ export interface RiskPacket {
   candidate_id: string;
   risk_score: number;
   violation_count: number;
-  intervention_level: "CLEAR" | "SOFT_WARNING" | "HARD_WARNING" | "TERMINAL";
+  intervention_level: "CLEAR" | "SOFT_WARNING" | "HARD_WARNING" | "WARNING_LOGGED" | "SEVERE_VIOLATION_LOGGED";
 }
 
 interface SniperScopeProps {
@@ -20,7 +20,7 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
   const loopTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const [isScanning, setIsScanning] = useState(false);
-  const [sysStatus, setSysStatus] = useState<"IDLE" | "ACTIVE" | "COMPROMISED" | "LOCKED">("IDLE");
+  const [sysStatus, setSysStatus] = useState<"IDLE" | "ACTIVE" | "COMPROMISED">("IDLE");
   
   // Telemetry State
   const [riskScore, setRiskScore] = useState(0);
@@ -49,24 +49,6 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
     }
   };
 
-  // --- 2. SOFTWARE TRIPWIRE: Tab Switching (DEV MODE) ---
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      // DEV OVERRIDE: Commented out so you can check your VS Code terminal without triggering a lockout!
-      /*
-      if (document.hidden && isScanning && sysStatus !== "COMPROMISED" && sysStatus !== "LOCKED") {
-        console.error("🛑 SOFTWARE TRIPWIRE TRIGGERED: Browser focus lost.");
-        setIsScanning(false);
-        setSysStatus("LOCKED");
-        setLatestVerdict("FATAL: BROWSER FOCUS LOST. UNAUTHORIZED TAB SWITCH DETECTED.");
-        setRiskScore(100);
-        setInterventionLevel("TERMINAL");
-      }
-      */
-    };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [isScanning, sysStatus]);
 
   // --- 3. OPTICS INITIALIZATION ---
   const startCamera = async () => {
@@ -126,7 +108,7 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
           body: JSON.stringify({
             candidate_id: CANDIDATE_ID,
             timestamp: Date.now(),
-            image_payload: base64Image
+            image_base64: base64Image
           })
         });
 
@@ -141,12 +123,7 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
           // Pass data up to VoiceOrb
           onTelemetryUpdate(data.risk_packet, data.verdict);
 
-          if (data.risk_packet.intervention_level === "TERMINAL") {
-            setSysStatus("LOCKED");
-            setIsScanning(false);
-            if (loopTimerRef.current) clearTimeout(loopTimerRef.current);
-            return; // Kill the loop permanently
-          }
+
         }
       } catch (error) {
         console.error("Backend unreachable", error);
@@ -182,7 +159,7 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
           autoPlay 
           playsInline 
           muted 
-          className={`w-full h-full object-cover transition-opacity duration-700 ${sysStatus === 'LOCKED' ? 'opacity-20 grayscale' : 'opacity-80'}`}
+          className="w-full h-full object-cover opacity-80"
         />
 
         {/* Cyberpunk Scanlines */}
@@ -194,7 +171,6 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
           <span className={`px-3 py-1 text-[10px] tracking-widest font-bold border rounded bg-black/50 backdrop-blur-sm
             ${sysStatus === 'IDLE' ? 'border-gray-500 text-gray-500' : ''}
             ${sysStatus === 'ACTIVE' ? 'border-sentry-neon text-sentry-neon shadow-[0_0_10px_rgba(0,255,65,0.3)]' : ''}
-            ${sysStatus === 'LOCKED' ? 'border-red-500 text-red-500 shadow-[0_0_10px_rgba(255,0,0,0.5)]' : ''}
           `}>
             {sysStatus}
           </span>
@@ -215,20 +191,10 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
           </div>
         )}
 
-        {/* Fatal Lockout Overlay */}
-        {sysStatus === 'LOCKED' && (
-          <div className="absolute inset-0 z-30 flex items-center justify-center bg-red-950/40 backdrop-blur-md">
-            <div className="border border-red-500 bg-black/80 p-8 flex flex-col items-center text-center shadow-[0_0_50px_rgba(255,0,0,0.3)]">
-              <span className="text-red-500 text-4xl mb-4">🛡️</span>
-              <h2 className="text-white text-2xl font-black tracking-widest mb-2">SYSTEM SECURED</h2>
-              <p className="text-red-400 text-xs tracking-widest font-mono uppercase">Violation Detected or Focus Lost</p>
-            </div>
-          </div>
-        )}
 
         {/* Controls */}
         <div className="absolute bottom-4 right-4 z-20 flex gap-4">
-          {!isScanning && sysStatus !== 'LOCKED' && (
+          {!isScanning && (
             <button onClick={startCamera} className="px-6 py-2 bg-sentry-neon text-black font-bold text-xs tracking-widest hover:bg-white transition-colors cursor-pointer">
               ENGAGE SENTRY
             </button>
@@ -273,8 +239,9 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
           </div>
 
           <div className={`p-4 rounded border flex justify-between items-center mb-6 transition-colors duration-500
-            ${interventionLevel === 'TERMINAL' ? 'border-red-500/30 bg-red-500/10 text-red-500' : 
-              interventionLevel === 'HARD_WARNING' ? 'border-orange-500/30 bg-orange-500/10 text-orange-400' : 
+            ${interventionLevel === 'SEVERE_VIOLATION_LOGGED' ? 'border-red-500/30 bg-red-500/10 text-red-500' : 
+              interventionLevel === 'HARD_WARNING' ? 'border-orange-500/30 bg-orange-500/10 text-orange-400' :
+              interventionLevel === 'WARNING_LOGGED' ? 'border-orange-500/30 bg-orange-500/10 text-orange-400' : 
               interventionLevel === 'SOFT_WARNING' ? 'border-yellow-500/30 bg-yellow-500/10 text-yellow-400' : 
               'border-sentry-border bg-white/5 text-gray-400'}`}
           >

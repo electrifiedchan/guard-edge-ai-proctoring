@@ -6,12 +6,12 @@ import VoiceOrb from "@/components/VoiceOrb";
 
 export default function Home() {
   const [hasWarned, setHasWarned] = useState(false);
-  const [voiceTranscript, setVoiceTranscript] = useState("SYSTEM STANDBY. WAITING FOR TRIGGER.");
+  const [liveTranscript, setLiveTranscript] = useState("SYSTEM STANDBY. WAITING FOR TRIGGER.");
   const [isTranscribing, setIsTranscribing] = useState(false);
 
   // Receives live transcripts from VoiceOrb's SpeechRecognition engine
   const handleTranscript = (text: string) => {
-    setVoiceTranscript(text);
+    setLiveTranscript(text);
     setIsTranscribing(true);
     // Dim the indicator after 2s of silence
     setTimeout(() => setIsTranscribing(false), 2000);
@@ -23,7 +23,7 @@ export default function Home() {
     // Trigger at 40% Risk
     if (packet.intervention_level === "HARD_WARNING" && !hasWarned) {
       setHasWarned(true);
-      setVoiceTranscript("AI: Candidate, anomalous behavior detected. Please explain your deviation from the screen.");
+      setLiveTranscript("AI: Candidate, anomalous behavior detected. Please explain your deviation from the screen.");
       
       // 1. TEXT TO SPEECH (The Interrogation)
       const utterance = new SpeechSynthesisUtterance(
@@ -43,28 +43,28 @@ export default function Home() {
           recognition.interimResults = true; // Show words as they are spoken
 
           recognition.onstart = () => {
-            setVoiceTranscript("MICROPHONE LIVE. RECORDING CANDIDATE AUDIO...");
+            setLiveTranscript("MICROPHONE LIVE. RECORDING CANDIDATE AUDIO...");
           };
 
           recognition.onresult = (event: any) => {
             const current = event.resultIndex;
             const transcript = event.results[current][0].transcript;
-            setVoiceTranscript(`CANDIDATE: "${transcript}"`);
+            setLiveTranscript(`CANDIDATE: "${transcript}"`);
           };
 
           recognition.onend = () => {
-            setVoiceTranscript("TRANSMITTING TO SANTIAGO LLM-JUDGE FOR EVALUATION...");
+            setLiveTranscript("TRANSMITTING TO SANTIAGO LLM-JUDGE FOR EVALUATION...");
             
             // Here is where we will eventually POST to your FastAPI backend.
             // For now, we simulate the LLM analyzing the excuse:
             setTimeout(() => {
-              setVoiceTranscript("EVALUATION COMPLETE. EXCUSE LOGGED. RESUMING STANDBY.");
+              setLiveTranscript("EVALUATION COMPLETE. EXCUSE LOGGED. RESUMING STANDBY.");
             }, 4000);
           };
 
           recognition.start();
         } else {
-          setVoiceTranscript("ERROR: SPEECH RECOGNITION NOT SUPPORTED IN THIS BROWSER.");
+          setLiveTranscript("ERROR: SPEECH RECOGNITION NOT SUPPORTED IN THIS BROWSER.");
         }
       };
 
@@ -93,7 +93,7 @@ export default function Home() {
 
         {/* Module 2: The Interrogator Stack */}
         <div className="flex-shrink-0 flex flex-col gap-8 w-full 2xl:w-[320px] pt-0 xl:pt-8 2xl:pt-0">
-           <VoiceOrb onTranscript={handleTranscript} />
+           <VoiceOrb onTranscriptUpdate={setLiveTranscript} />
            
            {/* Live Interrogator Transcript */}
            <div className="border border-sentry-border bg-[#0A0A0B] p-6 rounded-xl flex flex-col min-h-[200px] shadow-lg relative overflow-hidden">
@@ -103,7 +103,7 @@ export default function Home() {
                 VOICE LLM TRANSCRIPT
              </span>
              <p className={`text-xs leading-loose font-mono transition-colors duration-300 ${isTranscribing ? "text-sentry-neon" : "text-gray-300"}`}>
-               &gt; {voiceTranscript}
+               {liveTranscript || "> WAITING FOR AUDIO..."}
              </p>
            </div>
         </div>
