@@ -30,6 +30,24 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
 
   const CANDIDATE_ID = "major_project_candidate_01";
 
+  // --- MEDIAPIPE GATEKEEPER STATE ---
+  const telemetryRef = useRef({
+    faces_detected: 1,
+    is_talking: false,
+    head_pose: "center"
+  });
+  const gatekeeperRef = useRef<{ camera: any; faceMesh: any } | null>(null);
+
+  useEffect(() => {
+    // Dynamically inject MediaPipe Face Mesh on mount to avoid Turbopack strictness
+    if (typeof window !== "undefined" && !(window as any).FaceMesh) {
+      const script = document.createElement("script");
+      script.src = "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js";
+      script.async = true;
+      document.body.appendChild(script);
+    }
+  }, []);
+
   // --- 1. HARDWARE TRIPWIRE: Virtual Camera Detection ---
   const checkHardware = async () => {
     try {
@@ -49,6 +67,108 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
     }
   };
 
+  // --- 2. MEDIAPIPE FACE MESH (30fps CPU Gatekeeper) ---
+  const initGatekeeper = (videoEl: HTMLVideoElement) => {
+    // @ts-ignore
+    const FaceMesh = window.FaceMesh || (window as any).FaceMesh;
+    if (!FaceMesh) {
+      console.warn("FaceMesh not yet loaded. Trying again in 1s.");
+      setTimeout(() => {
+        if (!gatekeeperRef.current && videoRef.current) {
+          gatekeeperRef.current = initGatekeeper(videoRef.current) as any;
+        }
+      }, 1000);
+      return null;
+    }
+
+    const faceMesh = new FaceMesh({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
+    });
+
+    faceMesh.setOptions({
+      maxNumFaces: 3,
+      refineLandmarks: true,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+
+    faceMesh.onResults((results) => {
+      let faces = 0;
+      let talking = false;
+      let pose = "center";
+
+      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+        faces = results.multiFaceLandmarks.length;
+        
+        if (faces > 1) {
+          console.warn("🚨 CPU GATEKEEPER: Multiple Faces Detected.");
+        }
+
+        const primary = results.multiFaceLandmarks[0];
+        
+        // 1. Mouth Aspect Ratio (MAR)
+        const upperLip = primary[13];
+        const lowerLip = primary[14];
+        if (Math.abs(upperLip.y - lowerLip.y) > 0.015) {
+          talking = true;
+        }
+
+        // 2. Head Pose (Yaw/Pitch) using Empirical 2D Morphological Ratios
+        const nose = primary[1];
+        
+        // PITCH (Up/Down) via Forehead vs. Chin proportion
+        const forehead = primary[10];
+        const chin = primary[152];
+        
+        const foreheadToNose = nose.y - forehead.y;
+        const noseToChin = chin.y - nose.y;
+        const pitchRatio = foreheadToNose / noseToChin;
+
+        // YAW (Left/Right) via normalized Eye bounds
+        const leftEye = primary[33];
+        const rightEye = primary[263];
+        const dx = rightEye.x - leftEye.x;
+        let noseX = 0.5;
+        if (dx !== 0) {
+          // How far is the nose from the left eye?
+          noseX = (nose.x - leftEye.x) / dx;
+        }
+
+        // Determine State
+        if (pitchRatio > 1.4) pose = "down";       // Chin compresses, forehead elongates
+        else if (pitchRatio < 0.7) pose = "up";    // Forehead compresses, chin elongates
+        else if (noseX < 0.40) pose = "right";     // Nose shifts heavily left on-screen
+        else if (noseX > 0.60) pose = "left";      // Nose shifts heavily right on-screen
+      }
+
+      telemetryRef.current = {
+        faces_detected: faces,
+        is_talking: talking,
+        head_pose: pose
+      };
+    });
+
+  let isRunning = true;
+  let lastVideoTime = -1;
+
+  const onFrame = async () => {
+    if (!isRunning || !videoEl) return;
+    if (videoEl.readyState >= 2 && videoEl.currentTime !== lastVideoTime) {
+      lastVideoTime = videoEl.currentTime;
+      await faceMesh.send({ image: videoEl });
+    }
+    requestAnimationFrame(onFrame);
+  };
+  
+  videoEl.addEventListener('play', () => {
+    requestAnimationFrame(onFrame);
+  });
+
+  return { 
+    faceMesh,
+    stop: () => { isRunning = false; }
+  };
+};
 
   // --- 3. OPTICS INITIALIZATION ---
   const startCamera = async () => {
@@ -63,6 +183,12 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
       setIsScanning(true);
       setSysStatus("ACTIVE");
       setLatestVerdict("OPTICS ONLINE. ANALYZING BEHAVIOR...");
+
+      if (videoRef.current && !gatekeeperRef.current) {
+         // Start the 30fps Gatekeeper
+         gatekeeperRef.current = initGatekeeper(videoRef.current) as any;
+      }
+
       runInferenceLoop();
     } catch (err) {
       console.error("Camera access denied.", err);
@@ -72,6 +198,15 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
   };
 
   const stopCamera = () => {
+    if (gatekeeperRef.current) {
+      // @ts-ignore
+      gatekeeperRef.current.stop();
+      if (gatekeeperRef.current.faceMesh) {
+        gatekeeperRef.current.faceMesh.close();
+      }
+      gatekeeperRef.current = null;
+    }
+    
     if (videoRef.current && videoRef.current.srcObject) {
       const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
       tracks.forEach(track => track.stop());
@@ -90,16 +225,21 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
     const ctx = canvas.getContext("2d");
 
     if (ctx && video.readyState === 4) {
-      // Zero-Latency Crop: Grab the center 320x320 pixels to save VRAM
-      const cropSize = 320;
-      const startX = (video.videoWidth - cropSize) / 2;
-      const startY = (video.videoHeight - cropSize) / 2;
+      // Scale down the whole image to save bandwidth without losing context
+      const targetWidth = 640;
+      const targetHeight = 360;
 
-      canvas.width = cropSize;
-      canvas.height = cropSize;
-      ctx.drawImage(video, startX, startY, cropSize, cropSize, 0, 0, cropSize, cropSize);
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, 0, 0, targetWidth, targetHeight);
 
       const base64Image = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
+
+      console.log("🚀 [FRONTEND] OUTGOING PAYLOAD:", {
+        faces_detected: telemetryRef.current.faces_detected,
+        is_talking: telemetryRef.current.is_talking,
+        head_pose: telemetryRef.current.head_pose
+      });
 
       try {
         const response = await fetch("http://localhost:8080/api/v1/analyze-frame", {
@@ -108,7 +248,10 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
           body: JSON.stringify({
             candidate_id: CANDIDATE_ID,
             timestamp: Date.now(),
-            image_base64: base64Image
+            image_base64: base64Image,
+            faces_detected: telemetryRef.current.faces_detected,
+            is_talking: telemetryRef.current.is_talking,
+            head_pose: telemetryRef.current.head_pose
           })
         });
 
@@ -159,7 +302,7 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
           autoPlay 
           playsInline 
           muted 
-          className="w-full h-full object-cover opacity-80"
+          className="w-full h-full object-cover"
         />
 
         {/* Cyberpunk Scanlines */}
