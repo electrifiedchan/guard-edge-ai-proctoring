@@ -6,6 +6,9 @@ import httpx
 import sqlite3
 import cv2
 import numpy as np
+import os
+from openai import AsyncOpenAI
+from dotenv import load_dotenv
 from ultralytics import YOLO
 from datetime import datetime
 from contextlib import asynccontextmanager
@@ -14,6 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from core_memory.bea import bea_engine
 import voice_engine
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -69,28 +74,31 @@ OLLAMA_MODEL = "llama3.1:8b"
 OLLAMA_OPTIONS = {"num_predict": 150, "temperature": 0.0, "num_ctx": 1024}
 
 # --- YOLO26s STATE-OF-THE-ART OBJECT DETECTOR ---
-yolo_model = YOLO("yolo26s.pt")
+yolo_model = YOLO("yolov8n.pt")
 logger.info("🔫 YOLO26s VLM-Hybrid Object Detector Loaded.")
 
 # The Hybrid Security Logic Prompt (Text-Only LLM)
 SYSTEM_PROMPT = """
-<role>You are a security logic engine for an exam proctoring system. You will receive a list of objects detected by a YOLO camera sensor. Evaluate the risk based on these objects.</role>
+<role>You are an Educational Coach and Security Logic Engine for an advanced proctoring system. You will evaluate the candidate's engagement and risk based on YOLO visual arrays combined with MediaPipe CPU Tracking.</role>
 
 <rules>
-Rule 1 (GAZE): If the YOLO data mentions face orientation or head pose, determine if 'STRAIGHT', 'DOWN', or 'SIDE_OR_UP'. If no face data, default to 'STRAIGHT'.
-Rule 2 (CRITICAL): A situation is ONLY critical if YOLO detected 'cell phone' OR more than 1 'person'.
-Rule 3 (SAFE): If YOLO detected only 1 person and no cell phone, the situation is safe.
+RULE 0 (CRITICAL OVERRIDE): If faces_detected == 0, the student has either left the frame, covered the webcam, or obscured their face completely. You MUST immediately flag this as a critical violation. Set the engagement_score to 0, output behavior_zone: "CRITICAL_VIOLATION", and state clearly in the verdict that the candidate's face is obscured or missing.
+Rule 1 (CRITICAL): If 'Faces Detected' > 1, that is an immediate critical security violation (Multiple people present).
+Rule 2 (COACHING): If 'Talking' is True but no phone is detected by YOLO, issue a warning about potential earpiece/verbal coaching.
+Rule 3 (ATTENTION OVERRIDE): If the user's 'Head Pose' is anything other than 'center' (e.g., 'left', 'right', 'up', 'down'), you MUST penalize them. You MUST lower the engagement_score to a maximum of 40. You MUST set the behavior_zone to 'ATTENTION_DRIFT', and your verdict MUST state exactly which direction the candidate is looking away.
+Rule 4 (TARGET): Identify any physical cheating tools detected by YOLO (e.g. cell phone). Output 'NONE' if no tools.
 </rules>
 
 <output_format>
-You must reply STRICTLY in JSON. Keep values under 10 words. Use exact keys:
+You must reply STRICTLY in JSON. Use exact keys:
 {
-  "obs": "List the YOLO-detected objects.",
-  "target": "Output 'NONE' if no phone/extra person. Otherwise, name it.",
+  "engagement_score": integer (0-100, 100=perfect attention, drop points for talking or head pose drift),
+  "behavior_zone": "List the YOLO-detected objects and summarize tracking behaviors.",
+  "target": "NONE or name of cheating tool",
   "confidence": "HIGH",
-  "gaze": "STRAIGHT", "DOWN", or "SIDE_OR_UP",
-  "critical": boolean (true ONLY if target is NOT 'NONE'),
-  "verdict": "1 short sentence."
+  "gaze": "STRAIGHT", "DOWN", or "SIDE_OR_UP" (derive from head pose),
+  "critical": boolean (true ONLY if >1 face or target!=NONE),
+  "verdict": "1 short coaching sentence."
 }
 </output_format>
 """
@@ -99,9 +107,13 @@ class FramePayload(BaseModel):
     candidate_id: str
     timestamp: int
     image_base64: str
+    faces_detected: int = 1
+    is_talking: bool = False
+    head_pose: str = "center"
 
 @app.post("/api/v1/analyze-frame")
 async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks):
+    print(f"\n📥 [BACKEND] INCOMING PAYLOAD -> Faces: {payload.faces_detected}, Pose: '{payload.head_pose}', Talking: {payload.is_talking}")
     current_state = await bea_engine.get_state(payload.candidate_id)
     if current_state.get("intervention_level") == "SEVERE_VIOLATION_LOGGED":
         return {"candidate_id": payload.candidate_id, "timestamp": payload.timestamp, "verdict": "SESSION FLAGGED", "risk_packet": current_state}
@@ -132,20 +144,53 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
     logger.info(f"🔫 {yolo_context}")
 
     # --- PHASE 3: TEXT-LLM RISK EVALUATION ---
-    ollama_payload = {
-        "model": OLLAMA_MODEL, "system": SYSTEM_PROMPT,
-        "prompt": f"Evaluate this frame for exam security violations.\n{yolo_context}",
-        "stream": False, "format": "json", "options": OLLAMA_OPTIONS
-    }
+    engine_mode = os.getenv("ENGINE_MODE", "offline").lower()
+
+    user_prompt = (
+        f"YOLO Vision Detected: {yolo_context}\n"
+        f"MediaPipe CPU Telemetry -> Faces: {payload.faces_detected}, "
+        f"Talking: {payload.is_talking}, Head Pose: {payload.head_pose}"
+    )
 
     try:
-        response = await app.state.http_client.post(OLLAMA_URL, json=ollama_payload)
-        response.raise_for_status()
-        data = response.json()
-        raw_response = data.get("response", "{}")
+        if engine_mode == "api":
+            nv_client = AsyncOpenAI(
+                base_url="https://integrate.api.nvidia.com/v1",
+                api_key=os.getenv("NVIDIA_API_KEY")
+            )
+            
+            completion = await nv_client.chat.completions.create(
+                model="meta/llama-3.1-8b-instruct",
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.2,
+                top_p=0.7,
+                max_tokens=1024,
+            )
+            raw_llm_response = completion.choices[0].message.content
+        else:
+            ollama_payload = {
+                "model": OLLAMA_MODEL, "system": SYSTEM_PROMPT,
+                "prompt": user_prompt,
+                "stream": False, "format": "json", "options": OLLAMA_OPTIONS
+            }
+            response = await app.state.http_client.post(OLLAMA_URL, json=ollama_payload)
+            response.raise_for_status()
+            data = response.json()
+            raw_llm_response = data.get("response", "{}")
+
+        # Strip any standard json markdown formatting if present from the NV response
+        if raw_llm_response.startswith("```json"):
+            raw_llm_response = raw_llm_response[7:].strip()
+            if raw_llm_response.endswith("```"):
+                raw_llm_response = raw_llm_response[:-3].strip()
+
+        print(f"🧠 [LLM] RAW VERDICT: {raw_llm_response}\n")
 
         try:
-            ai_response = json.loads(raw_response)
+            ai_response = json.loads(raw_llm_response)
         except json.JSONDecodeError:
             ai_response = {"gaze": "STRAIGHT", "critical": False, "verdict": "JSON Error"}
 

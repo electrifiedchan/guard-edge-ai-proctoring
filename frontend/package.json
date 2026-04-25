@@ -9,6 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@mediapipe/camera_utils": "^0.3.1675466862",
+    "@mediapipe/face_mesh": "^0.4.1633559619",
     "clsx": "^2.1.1",
     "d3-shape": "^3.2.0",
     "framer-motion": "^12.38.0",
