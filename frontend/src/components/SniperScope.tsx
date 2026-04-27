@@ -30,9 +30,11 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
 
   const CANDIDATE_ID = "major_project_candidate_01";
 
+  const [isFaceMeshReady, setIsFaceMeshReady] = useState(false);
+
   // --- MEDIAPIPE GATEKEEPER STATE ---
   const telemetryRef = useRef({
-    faces_detected: 1,
+    faces_detected: 0, // Better default so we don't spam multiple face alerts before real data
     is_talking: false,
     head_pose: "center"
   });
@@ -44,7 +46,12 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
       const script = document.createElement("script");
       script.src = "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js";
       script.async = true;
+      script.onload = () => {
+        setIsFaceMeshReady(true);
+      };
       document.body.appendChild(script);
+    } else {
+      setIsFaceMeshReady(true);
     }
   }, []);
 
@@ -153,7 +160,7 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
 
   const onFrame = async () => {
     if (!isRunning || !videoEl) return;
-    if (videoEl.readyState >= 2 && videoEl.currentTime !== lastVideoTime) {
+    if (videoEl.readyState >= 3 && videoEl.currentTime !== lastVideoTime) { // readyState 3 is 'HAVE_FUTURE_DATA'
       lastVideoTime = videoEl.currentTime;
       await faceMesh.send({ image: videoEl });
     }
@@ -184,7 +191,7 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
       setSysStatus("ACTIVE");
       setLatestVerdict("OPTICS ONLINE. ANALYZING BEHAVIOR...");
 
-      if (videoRef.current && !gatekeeperRef.current) {
+      if (videoRef.current && !gatekeeperRef.current && isFaceMeshReady) {
          // Start the 30fps Gatekeeper
          gatekeeperRef.current = initGatekeeper(videoRef.current) as any;
       }
@@ -218,13 +225,15 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
 
   // --- 4. THE SELF-HEALING ASYNC LOOP ---
   const runInferenceLoop = useCallback(async () => {
+    // Only run if scanning AND FaceMesh actually picked up a face at any point
     if (!videoRef.current || !canvasRef.current || !isScanning) return;
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
 
-    if (ctx && video.readyState === 4) {
+    // readyState >= 3 means we have data for the current and future frames
+    if (ctx && video.readyState >= 3) {
       // Scale down the whole image to save bandwidth without losing context
       const targetWidth = 640;
       const targetHeight = 360;
@@ -269,7 +278,8 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
 
         }
       } catch (error) {
-        console.error("Backend unreachable", error);
+        console.log("Backend unreachable:", (error as Error).message);
+        setLatestVerdict("⚠️ ERROR: BACKEND CONNECTION FAILED. CHECK IF EDGE_MAIN.PY IS RUNNING.");
       }
     }
 
@@ -278,13 +288,17 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
   }, [isScanning, onTelemetryUpdate]);
 
   useEffect(() => {
-    if (isScanning) {
+    // Only spin up the loops if we are scanning and the FaceMesh is confirmed downloaded
+    if (isScanning && isFaceMeshReady) {
+      if (videoRef.current && !gatekeeperRef.current) {
+        gatekeeperRef.current = initGatekeeper(videoRef.current) as any;
+      }
       runInferenceLoop();
     }
     return () => {
       if (loopTimerRef.current) clearTimeout(loopTimerRef.current);
     };
-  }, [isScanning, runInferenceLoop]);
+  }, [isScanning, isFaceMeshReady, runInferenceLoop]);
 
 
   return (
