@@ -1,14 +1,13 @@
+from concurrent.futures import ThreadPoolExecutor
+import asyncio
 import logging
 import traceback
 import json
 import base64
-import httpx
 import sqlite3
 import cv2
 import numpy as np
 import os
-from openai import AsyncOpenAI
-from dotenv import load_dotenv
 from ultralytics import YOLO
 from datetime import datetime
 from contextlib import asynccontextmanager
@@ -17,8 +16,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from core_memory.bea import bea_engine
 import voice_engine
-
-load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -59,9 +56,9 @@ async def lifespan(app: FastAPI):
     logger.info("🛡️  G.U.A.R.D. Engine warming up...")
     init_db() # Boot the database
     voice_engine.start_voice_loop() # Boot the voice engine
-    app.state.http_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
+    app.state.executor = ThreadPoolExecutor(max_workers=2)
     yield
-    await app.state.http_client.aclose()
+    app.state.executor.shutdown(wait=False)
 
 app = FastAPI(title="G.U.A.R.D. Edge Vision Sentry", lifespan=lifespan)
 
@@ -69,39 +66,48 @@ app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "llama3.1:8b"
-OLLAMA_OPTIONS = {"num_predict": 150, "temperature": 0.0, "num_ctx": 1024}
-
 # --- YOLO26s STATE-OF-THE-ART OBJECT DETECTOR ---
-yolo_model = YOLO("yolov8s.pt") # Upgraded to 'small' model instead of 'nano' for better detection
-logger.info("🔫 YOLOv8s Object Detector Loaded.")
+import torch
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+yolo_model = YOLO('yolov8s.pt')
+yolo_model.to(device)
+logger.info(f'🔫 YOLOv8s loaded on {device.upper()}')
 
-# The Hybrid Security Logic Prompt (Text-Only LLM)
-SYSTEM_PROMPT = """
-<role>You are an Educational Coach and Security Logic Engine for an advanced proctoring system. You will evaluate the candidate's engagement and risk based on YOLO visual arrays combined with MediaPipe CPU Tracking.</role>
+def determine_verdict(detected_objects: list, faces: int, talking: bool, head_pose: str):
+    is_critical = False
+    gaze = "STRAIGHT"
+    verdict = "Candidate is fully engaged and attentive."
 
-<rules>
-RULE 0 (CRITICAL OVERRIDE): If faces_detected == 0, the student has either left the frame, covered the webcam, or obscured their face completely. You MUST immediately flag this as a critical violation. Set the engagement_score to 0, output behavior_zone: "CRITICAL_VIOLATION", and state clearly in the verdict that the candidate's face is obscured or missing.
-Rule 1 (CRITICAL): If 'Faces Detected' > 1, that is an immediate critical security violation (Multiple people present).
-Rule 2 (COACHING): If 'Talking' is True but no phone is detected by YOLO, issue a warning about potential earpiece/verbal coaching.
-Rule 3 (ATTENTION OVERRIDE): If the user's 'Head Pose' is anything other than 'center' (e.g., 'left', 'right', 'up', 'down'), you MUST penalize them. You MUST lower the engagement_score to a maximum of 40. You MUST set the behavior_zone to 'ATTENTION_DRIFT', and your verdict MUST state exactly which direction the candidate is looking away.
-Rule 4 (TARGET): Identify any physical cheating tools detected by YOLO (e.g. cell phone). Output 'NONE' if no tools.
-</rules>
+    if faces == 0:
+        is_critical = True
+        verdict = "CRITICAL: Candidate face not visible or obscured."
 
-<output_format>
-You must reply STRICTLY in JSON. Use exact keys:
-{
-  "engagement_score": integer (0-100, 100=perfect attention, drop points for talking or head pose drift),
-  "behavior_zone": "List the YOLO-detected objects and summarize tracking behaviors.",
-  "target": "NONE or name of cheating tool",
-  "confidence": "HIGH",
-  "gaze": "STRAIGHT", "DOWN", or "SIDE_OR_UP" (derive from head pose),
-  "critical": boolean (true ONLY if >1 face or target!=NONE),
-  "verdict": "1 short coaching sentence."
-}
-</output_format>
-"""
+    elif faces > 1:
+        is_critical = True
+        verdict = "CRITICAL: Multiple persons detected in frame."
+
+    elif any("cell phone" in obj.lower() for obj in detected_objects):
+        is_critical = True
+        verdict = "CRITICAL: Mobile device detected in frame."
+
+    elif any("book" in obj.lower() or "laptop" in obj.lower() for obj in detected_objects):
+        is_critical = True
+        verdict = "CRITICAL: Prohibited item detected on desk."
+
+    elif head_pose in ["left", "right", "up"]:
+        gaze = "SIDE_OR_UP"
+        verdict = f"Attention drift detected: candidate looking {head_pose}."
+
+    elif head_pose == "down":
+        gaze = "DOWN"
+        verdict = "Candidate looking downward — possible reference material."
+
+    if talking and not is_critical:
+        verdict += " Verbal activity detected — possible earpiece coaching."
+
+    logic_trace = f"Objects: {detected_objects or 'None'} | Faces: {faces} | Pose: {head_pose} | Talking: {talking}"
+
+    return gaze, is_critical, verdict, logic_trace
 
 class FramePayload(BaseModel):
     candidate_id: str
@@ -130,8 +136,19 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
         logger.error(f"❌ Image decode error: {e}")
         raise HTTPException(status_code=400, detail="Invalid image payload.")
 
-    # --- PHASE 2: YOLO26s INFERENCE (Deterministic, Zero Hallucination) ---
-    results = yolo_model(image, verbose=False, classes=[0, 67], imgsz=640, augment=True, conf=0.35)
+    # --- PHASE 2: YOLO INFERENCE (Non-blocking, off event loop) ---
+    loop = asyncio.get_running_loop()
+    results = await loop.run_in_executor(
+        app.state.executor,
+        lambda: yolo_model(
+            image,
+            verbose=False,
+            classes=[0, 67],
+            imgsz=640,
+            augment=False,
+            conf=0.65
+        )
+    )
     detected_objects = []
     for r in results:
         for box in r.boxes:
@@ -143,95 +160,34 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
     yolo_context = f"YOLO Detected Objects: {', '.join(detected_objects) if detected_objects else 'None detected'}"
     logger.info(f"🔫 {yolo_context}")
 
-    # --- PHASE 3: TEXT-LLM RISK EVALUATION ---
-    engine_mode = os.getenv("ENGINE_MODE", "offline").lower()
-
-    user_prompt = (
-        f"YOLO Vision Detected: {yolo_context}\n"
-        f"MediaPipe CPU Telemetry -> Faces: {payload.faces_detected}, "
-        f"Talking: {payload.is_talking}, Head Pose: {payload.head_pose}"
+    # --- PHASE 3: DETERMINISTIC VERDICT ENGINE ---
+    gaze, is_critical, verdict, logic_trace = determine_verdict(
+        detected_objects=detected_objects,
+        faces=payload.faces_detected,
+        talking=payload.is_talking,
+        head_pose=payload.head_pose
     )
 
-    try:
-        if engine_mode == "api":
-            nv_client = AsyncOpenAI(
-                base_url="https://integrate.api.nvidia.com/v1",
-                api_key=os.getenv("NVIDIA_API_KEY")
-            )
-            
-            completion = await nv_client.chat.completions.create(
-                model="meta/llama-3.1-8b-instruct",
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.2,
-                top_p=0.7,
-                max_tokens=1024,
-            )
-            raw_llm_response = completion.choices[0].message.content
-        else:
-            ollama_payload = {
-                "model": OLLAMA_MODEL, "system": SYSTEM_PROMPT,
-                "prompt": user_prompt,
-                "stream": False, "format": "json", "options": OLLAMA_OPTIONS
-            }
-            response = await app.state.http_client.post(OLLAMA_URL, json=ollama_payload)
-            response.raise_for_status()
-            data = response.json()
-            raw_llm_response = data.get("response", "{}")
+    if is_critical:
+        risk_packet = await bea_engine.trigger_fatal_lockout(payload.candidate_id)
+    else:
+        risk_packet = await bea_engine.record_telemetry(payload.candidate_id, gaze)
 
-        # Strip any standard json markdown formatting if present from the NV response
-        if raw_llm_response.startswith("```json"):
-            raw_llm_response = raw_llm_response[7:].strip()
-            if raw_llm_response.endswith("```"):
-                raw_llm_response = raw_llm_response[:-3].strip()
+    # Extract autopsy flag from BEA temporal graph
+    autopsy_flag = risk_packet.get("autopsy_flag", False)
 
-        print(f"🧠 [LLM] RAW VERDICT: {raw_llm_response}\n")
+    # 💾 Write to SQLite Database in the background
+    evidence_image = payload.image_base64 if autopsy_flag else None
+    background_tasks.add_task(log_to_db, payload.candidate_id, gaze, is_critical, risk_packet['risk_score'], risk_packet['intervention_level'], logic_trace, evidence_image)
+    background_tasks.add_task(bea_engine.cleanup_stale_sessions)
 
-        try:
-            ai_response = json.loads(raw_llm_response)
-        except json.JSONDecodeError:
-            ai_response = {"gaze": "STRAIGHT", "critical": False, "verdict": "JSON Error"}
+    # --- RESTORED TERMINAL LOGS ---
+    logger.info(f"👁️  VERDICT: {verdict}")
+    logger.info(f"🧠  LOGIC TRACE: {logic_trace}")
+    logger.info(f"🎯  GAZE: {gaze} | CRITICAL: {is_critical} | RISK: {risk_packet['risk_score']}% [{risk_packet['intervention_level']}]")
+    logger.info("-" * 50)
 
-        # Extract the new compressed keys
-        confidence = ai_response.get("confidence", "LOW")
-        gaze = ai_response.get("gaze", "STRAIGHT")
-        is_critical = bool(ai_response.get("critical", False))
-        verdict = ai_response.get("verdict", "")
-        logic_trace = ai_response.get("target", "None")
-
-        # --- THE HALLUCINATION GUARDRAIL ---
-        if is_critical and confidence != "HIGH":
-            logger.warning(f"⚠️ AI Hallucination caught! Overriding low-confidence threat: {logic_trace}")
-            is_critical = False
-            verdict = f"System nominal. Ignored low-confidence object: {logic_trace}"
-
-        if is_critical:
-            risk_packet = await bea_engine.trigger_fatal_lockout(payload.candidate_id)
-        else:
-            risk_packet = await bea_engine.record_telemetry(payload.candidate_id, gaze)
-
-        # Extract autopsy flag from BEA temporal graph
-        autopsy_flag = risk_packet.get("autopsy_flag", False)
-
-        # 💾 Write to SQLite Database in the background
-        evidence_image = payload.image_base64 if autopsy_flag else None
-        background_tasks.add_task(log_to_db, payload.candidate_id, gaze, is_critical, risk_packet['risk_score'], risk_packet['intervention_level'], logic_trace, evidence_image)
-        background_tasks.add_task(bea_engine.cleanup_stale_sessions)
-
-        # --- RESTORED TERMINAL LOGS ---
-        logger.info(f"👁️  VERDICT: {verdict}")
-        logger.info(f"🧠  LOGIC TRACE: {logic_trace}")
-        logger.info(f"🎯  GAZE: {gaze} | CRITICAL: {is_critical} | RISK: {risk_packet['risk_score']}% [{risk_packet['intervention_level']}]")
-        logger.info("-" * 50)
-
-        return {"candidate_id": payload.candidate_id, "timestamp": payload.timestamp, "verdict": verdict, "gaze": gaze, "risk_packet": risk_packet}
-
-    except Exception as e:
-        logger.error(f"❌ Ollama Error [{type(e).__name__}]: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise HTTPException(status_code=503, detail="Edge AI Engine unreachable.")
+    return {"candidate_id": payload.candidate_id, "timestamp": payload.timestamp, "verdict": verdict, "gaze": gaze, "risk_packet": risk_packet}
 
 @app.get("/api/v1/logs")
 async def get_audit_logs():
