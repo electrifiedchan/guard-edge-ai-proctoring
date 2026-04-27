@@ -41,7 +41,7 @@ export default function VoiceOrb({ onTranscriptUpdate }: VoiceOrbProps) {
           }
         }
       } catch (e) {
-        console.error("Backend voice sync failed:", e);
+        console.log("Backend voice sync failed:", (e as Error).message);
       }
     };
 

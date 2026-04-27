@@ -74,8 +74,8 @@ OLLAMA_MODEL = "llama3.1:8b"
 OLLAMA_OPTIONS = {"num_predict": 150, "temperature": 0.0, "num_ctx": 1024}
 
 # --- YOLO26s STATE-OF-THE-ART OBJECT DETECTOR ---
-yolo_model = YOLO("yolov8n.pt")
-logger.info("🔫 YOLO26s VLM-Hybrid Object Detector Loaded.")
+yolo_model = YOLO("yolov8s.pt") # Upgraded to 'small' model instead of 'nano' for better detection
+logger.info("🔫 YOLOv8s Object Detector Loaded.")
 
 # The Hybrid Security Logic Prompt (Text-Only LLM)
 SYSTEM_PROMPT = """

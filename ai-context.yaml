@@ -1,0 +1,26 @@
+name: "guard-edge-ai-proctoring"
+description: "AI Proctoring System using Next.js, FastAPI, MediaPipe Face Tracking, and YOLOv8s Object Detection"
+stack:
+  frontend:
+    framework: "Next.js 15 (Turbopack, App Router)"
+    styling: "Tailwind CSS"
+    language: "TypeScript"
+    key_features: "MediaPipe FaceMesh (CDN loaded, manual requestAnimationFrame loop), Framer Motion"
+    port: 3000
+    location: "./frontend"
+  backend:
+    framework: "FastAPI"
+    language: "Python 3.10+"
+    server: "Uvicorn"
+    ai_models: "YOLOv8s for Object Detection, Ollama/Nvidia NIM for VLM-Hybrid Evaluation"
+    database: "SQLite (sentry_logs.db)"
+    port: 8080
+    location: "./backend"
+core_logic:
+  - "Frontend captures webcam frames and uses MediaPipe to send telemetry (faces_detected, is_talking, head_pose) along with a scaled base64 image to the backend."
+  - "Backend decodes image to numpy array. Runs YOLOv8s to detect phones/people."
+  - "An LLM (evaluator) receives YOLO detected objects and MediaPipe telemetry to determine a verdict and risk score."
+  - "Frontend loop is self-healing: waits for readyState >= 3 and faceMesh.onload before triggering 5s inference loop."
+important_commands:
+  frontend_dev: "cd frontend && pnpm dev"
+  backend_dev: "cd backend && .\.venv\Scripts\python.exe -m uvicorn edge_main:app --port 8080 --reload"
