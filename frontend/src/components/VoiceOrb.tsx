@@ -51,111 +51,95 @@ export default function VoiceOrb({ onTranscriptUpdate }: VoiceOrbProps) {
     return () => clearInterval(interval);
   }, [isEngaged, onTranscriptUpdate, orbScale]);
 
-  // ─── Orb Visual Mappings ─────────────────────────────────────────────────
-  const getOrbVisuals = () => {
-    switch (voiceState) {
-      case "IDLE":    return {
-        boxShadow:  "0px 0px 0px rgba(0,0,0,0)",
-        border:     "1px solid rgba(255,255,255,0.1)",
-        background: "radial-gradient(circle, rgba(20,20,20,1) 0%, rgba(0,0,0,1) 100%)",
-        animScale:  1,    rotate: 0,       duration: 4,    text: "STANDBY",
-      };
-      case "LISTEN":  return {
-        boxShadow:  "0px 0px 40px rgba(0,255,65,0.4)",
-        border:     "2px solid rgba(0,255,65,0.8)",
-        background: "radial-gradient(circle, rgba(0,255,65,0.2) 0%, rgba(0,0,0,1) 100%)",
-        animScale:  1,    rotate: 0,       duration: 1.5,  text: "LISTENING...",
-      };
-      case "PROCESS": return {
-        boxShadow:  "0px 0px 20px rgba(255,165,0,0.5)",
-        border:     "2px dashed rgba(255,165,0,0.8)",
-        background: "radial-gradient(circle, rgba(255,165,0,0.1) 0%, rgba(0,0,0,1) 100%)",
-        animScale:  0.9,  rotate: 360,     duration: 0.8,  text: "PROCESSING",
-      };
-      case "SPEAK":   return {
-        boxShadow:  "0px 0px 60px rgba(0,195,255,0.6)",
-        border:     "3px solid rgba(0,195,255,1)",
-        background: "radial-gradient(circle, rgba(0,195,255,0.3) 0%, rgba(0,0,0,1) 100%)",
-        animScale:  [1, 1.2, 0.9, 1.1, 1], rotate: 0,    duration: 0.3,  text: "SPEAKING",
-      };
-    }
+  // ─── Orb visual mappings ────────────────────────────────────────────────
+  // Single-token-per-state so palette stays consistent with the rest of the app.
+  const stateMeta: Record<VoiceState, { label: string; token: string; rgba: string; rotate: number; duration: number; animScale: number | number[] }> = {
+    IDLE:    { label: "Standby",     token: "var(--color-fog)",    rgba: "98,102,109",  rotate: 0,   duration: 4,   animScale: 1 },
+    LISTEN:  { label: "Listening",   token: "var(--color-signal)", rgba: "0,217,146",   rotate: 0,   duration: 1.5, animScale: 1 },
+    PROCESS: { label: "Processing",  token: "var(--color-iris)",   rgba: "117,83,255",  rotate: 360, duration: 0.8, animScale: 0.94 },
+    SPEAK:   { label: "Speaking",    token: "var(--color-info)",   rgba: "76,179,212",  rotate: 0,   duration: 0.3, animScale: [1, 1.12, 0.94, 1.06, 1] },
   };
 
-  const v = getOrbVisuals();
+  const v = stateMeta[voiceState];
 
   return (
-    <div className="flex flex-col items-center justify-center p-8 bg-[#0A0A0B] border border-sentry-border rounded-xl relative overflow-hidden group">
+    <div className="lift-1 rounded-xl p-6 relative overflow-hidden flex flex-col items-center">
       <button
         onClick={() => setDevMode(d => !d)}
-        className="absolute top-2 right-2 w-4 h-4 bg-transparent hover:bg-white/10 rounded cursor-pointer z-50 transition-colors"
-        title="Toggle Developer Controls"
+        className="absolute top-2 right-2 w-4 h-4 bg-transparent hover:bg-[var(--color-surface-2)] rounded cursor-pointer z-50 transition-colors"
+        title="Toggle developer controls"
       />
 
-      <h3 className="text-[10px] tracking-widest text-gray-500 absolute top-4 left-4 flex items-center gap-2">
-        <span className={`w-1 h-1 rounded-full transition-colors duration-300 ${isEngaged ? "bg-sentry-neon animate-pulse" : "bg-gray-500"}`} />
-        AUDIO INTERROGATOR
-      </h3>
+      <span className="absolute top-4 left-4 eyebrow flex items-center gap-2">
+        <span
+          className={`w-1.5 h-1.5 rounded-full transition-colors ${
+            isEngaged ? "bg-[var(--color-signal)] pulse-signal" : "bg-[var(--color-fog)]"
+          }`}
+        />
+        Audio interrogator
+      </span>
 
       <div className="relative w-32 h-32 my-8 flex items-center justify-center">
         <motion.div
           animate={{
-            boxShadow: v.boxShadow,
-            rotate:    v.rotate,
+            boxShadow: voiceState === "IDLE"
+              ? "0 0 0 rgba(0,0,0,0)"
+              : `0 0 32px rgba(${v.rgba}, 0.30)`,
+            rotate: v.rotate,
             scale: voiceState === "LISTEN" ? undefined : v.animScale,
           }}
           style={{
-            scale:      voiceState === "LISTEN" ? orbScale : undefined,
-            border:     v.border,
-            background: v.background,
+            scale: voiceState === "LISTEN" ? orbScale : undefined,
+            border: `1px solid rgba(${v.rgba}, ${voiceState === "IDLE" ? 0.18 : 0.55})`,
+            background: `radial-gradient(circle, rgba(${v.rgba}, ${voiceState === "IDLE" ? 0.04 : 0.16}) 0%, var(--color-surface) 70%)`,
           }}
           transition={{
             duration: v.duration,
-            repeat:   voiceState === "PROCESS" || voiceState === "SPEAK" ? Infinity : 0,
-            ease:     voiceState === "PROCESS" ? "linear" : "easeInOut",
+            repeat: voiceState === "PROCESS" || voiceState === "SPEAK" ? Infinity : 0,
+            ease: voiceState === "PROCESS" ? "linear" : "easeInOut",
           }}
           className="absolute inset-0 rounded-full flex items-center justify-center z-10"
         >
-          <div className={`w-12 h-12 rounded-full transition-colors duration-500 ${
-            voiceState === "IDLE"    ? "bg-gray-800" :
-            voiceState === "LISTEN"  ? "bg-sentry-neon animate-pulse" :
-            voiceState === "PROCESS" ? "bg-orange-500" :
-            "bg-cyan-400"
-          }`} />
+          <div
+            className="w-10 h-10 rounded-full transition-colors duration-500"
+            style={{
+              backgroundColor: voiceState === "IDLE" ? "var(--color-surface-3)" : v.token,
+              boxShadow: voiceState === "IDLE" ? "none" : `0 0 12px rgba(${v.rgba}, 0.55)`,
+            }}
+          />
         </motion.div>
       </div>
 
-      <p className={`text-xs tracking-widest font-mono transition-colors duration-500 ${
-        voiceState === "IDLE"    ? "text-gray-600" :
-        voiceState === "LISTEN"  ? "text-sentry-neon" :
-        voiceState === "PROCESS" ? "text-orange-400" :
-        "text-cyan-400"
-      }`}>
-        &gt; {v.text}
+      <p
+        className="text-[12px] font-medium tracking-tight transition-colors duration-500"
+        style={{ color: voiceState === "IDLE" ? "var(--color-slate)" : v.token }}
+      >
+        {v.label}
       </p>
 
       <button
         onClick={() => setIsEngaged(!isEngaged)}
-        className={`mt-5 px-6 py-2 text-[10px] tracking-widest font-bold border rounded transition-all cursor-pointer ${
+        className={`mt-5 h-9 px-4 rounded-md text-[12px] font-medium tracking-tight border transition-colors cursor-pointer ${
           isEngaged
-            ? "border-red-500/50 text-red-400 hover:bg-red-500/10 hover:border-red-400"
-            : "border-sentry-neon/50 text-sentry-neon hover:bg-sentry-neon/10 hover:border-sentry-neon"
+            ? "border-[var(--color-danger)]/40 text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"
+            : "border-[var(--color-iris)]/45 text-[var(--color-iris)] hover:bg-[var(--color-iris)]/10"
         }`}
       >
-        {isEngaged ? "DEACTIVATE SYNC" : "ACTIVATE SYNC"}
+        {isEngaged ? "Deactivate sync" : "Activate sync"}
       </button>
 
       {devMode && (
-        <div className="mt-6 pt-4 border-t border-sentry-border w-full flex flex-col items-center gap-2">
-          <span className="text-[9px] text-gray-500 tracking-widest">DEV OVERRIDE</span>
-          <div className="flex gap-2 flex-wrap justify-center">
+        <div className="mt-6 pt-4 border-t border-[var(--color-hairline)] w-full flex flex-col items-center gap-2">
+          <span className="eyebrow">Dev override</span>
+          <div className="flex gap-1.5 flex-wrap justify-center">
             {(["IDLE", "LISTEN", "PROCESS", "SPEAK"] as VoiceState[]).map(state => (
               <button
                 key={state}
                 onClick={() => setVoiceState(state)}
-                className={`px-3 py-1 text-[10px] tracking-widest border rounded transition-all ${
+                className={`px-2.5 h-7 text-[11px] font-medium tracking-tight rounded-md border transition-colors ${
                   voiceState === state
-                    ? "bg-white text-black border-white font-bold"
-                    : "border-gray-700 text-gray-500 hover:border-gray-400"
+                    ? "bg-[var(--color-surface-2)] border-[var(--color-hairline-strong)] text-[var(--color-snow)]"
+                    : "border-[var(--color-hairline)] text-[var(--color-slate)] hover:text-[var(--color-snow)] hover:border-[var(--color-hairline-strong)]"
                 }`}
               >
                 {state}

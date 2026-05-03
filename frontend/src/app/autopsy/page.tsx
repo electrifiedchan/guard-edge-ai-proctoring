@@ -11,7 +11,20 @@ interface AutopsyLog {
   risk_score: number;
   intervention_level: string;
   ai_logic_trace: string;
-  image_payload: string;
+  image_payload: string; // URL path served by backend StaticFiles, or legacy base64
+}
+
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
+
+// Resolves an image_payload field into a usable <img src>. Supports the new
+// filesystem URL scheme as well as legacy base64-encoded rows still in the DB.
+function resolveEvidenceSrc(payload: string): string {
+  if (!payload) return "";
+  if (payload.startsWith("data:")) return payload;
+  if (payload.startsWith("http://") || payload.startsWith("https://")) return payload;
+  if (payload.startsWith("/")) return `${API_BASE}${payload}`;
+  return `data:image/jpeg;base64,${payload}`;
 }
 
 export default function AutopsyPage() {
@@ -21,7 +34,7 @@ export default function AutopsyPage() {
   useEffect(() => {
     const fetchLogs = async () => {
       try {
-        const response = await fetch("http://localhost:8080/api/v1/autopsy-logs");
+        const response = await fetch(`${API_BASE}/api/v1/autopsy-logs`);
         if (response.ok) {
           const data = await response.json();
           setLogs(data);
@@ -93,12 +106,9 @@ export default function AutopsyPage() {
               {/* Evidence Photo */}
               <div className="relative">
                 <img
-                  src={
-                    log.image_payload.startsWith("data:")
-                      ? log.image_payload
-                      : `data:image/jpeg;base64,${log.image_payload}`
-                  }
+                  src={resolveEvidenceSrc(log.image_payload)}
                   alt={`Evidence frame ${index + 1}`}
+                  loading="lazy"
                   className="w-full h-48 object-cover grayscale opacity-80 group-hover:opacity-100 group-hover:grayscale-0 transition-all duration-500"
                 />
                 {/* Overlay Badge */}

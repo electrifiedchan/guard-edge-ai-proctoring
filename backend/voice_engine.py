@@ -1,10 +1,23 @@
 import threading
 import time
-import speech_recognition as sr
-import pyttsx3
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Optional imports — speech_recognition + pyttsx3 depend on native libraries
+# (PortAudio, espeak, etc.) that may be absent in Docker/headless/CI envs.
+# We import defensively so the backend boots even when audio stack is missing.
+try:
+    import speech_recognition as sr  # type: ignore
+except Exception as e:  # pragma: no cover - env-dependent
+    sr = None  # type: ignore
+    logger.warning(f"⚠️  speech_recognition unavailable, STT disabled: {e}")
+
+try:
+    import pyttsx3  # type: ignore
+except Exception as e:  # pragma: no cover - env-dependent
+    pyttsx3 = None  # type: ignore
+    logger.warning(f"⚠️  pyttsx3 unavailable, TTS disabled: {e}")
 
 # Global Voice State
 voice_state = {
@@ -13,18 +26,20 @@ voice_state = {
 }
 
 # Initialize TTS
-try:
-    engine = pyttsx3.init()
-    engine.setProperty('rate', 150)
-except Exception as e:
-    logger.error(f"TTS Init Error: {e}")
-    engine = None
+engine = None
+if pyttsx3 is not None:
+    try:
+        engine = pyttsx3.init()
+        engine.setProperty('rate', 150)
+    except Exception as e:
+        logger.error(f"TTS Init Error: {e}")
+        engine = None
 
 def speak(text):
     if not engine:
         logger.error("TTS engine not available.")
         return
-        
+
     voice_state["state"] = "SPEAK"
     voice_state["transcript"] = f"AI: {text}"
     logger.info(f"🗣️ TTS: {text}")
@@ -37,6 +52,9 @@ def speak(text):
         voice_state["state"] = "IDLE"
 
 def voice_loop():
+    if sr is None:
+        logger.warning("🔇 Voice loop aborted: speech_recognition not installed.")
+        return
     recognizer = sr.Recognizer()
     try:
         microphone = sr.Microphone()
@@ -80,5 +98,8 @@ def voice_loop():
             time.sleep(1)
 
 def start_voice_loop():
+    if sr is None and engine is None:
+        logger.info("🔇 Voice engine inactive (no audio stack present).")
+        return
     thread = threading.Thread(target=voice_loop, daemon=True)
     thread.start()

@@ -1,17 +1,117 @@
 @import "tailwindcss";
 
+/* ── Design tokens · Linear bones + Sentry accent + VoltAgent signal ── */
 @theme {
-  --color-sentry-neon: #00FF41;
-  --color-sentry-border: #2A2A2A;
+  /* Surface ladder — 4 step (Linear) */
+  --color-canvas:    #050507;     /* page background */
+  --color-surface:   #0f1011;     /* cards, panels */
+  --color-surface-2: #141516;     /* nested / hovered */
+  --color-surface-3: #18191a;     /* dropdowns, popovers */
+
+  /* Hairline borders */
+  --color-hairline:        #23252a;
+  --color-hairline-strong: #34343a;
+
+  /* Brand accent — Sentry iris (single chromatic accent for CTAs/brand) */
+  --color-iris:        #7553ff;
+  --color-iris-hover:  #8c70ff;
+  --color-iris-press:  #604de0;
+
+  /* Status / signal — VoltAgent emerald (active/secure indicators only) */
+  --color-signal:      #00d992;
+  --color-signal-soft: rgba(0, 217, 146, 0.10);
+
+  /* Severity ladder (observability tradition) */
+  --color-warn:   #ffba00;
+  --color-amber:  #ff8c2a;
+  --color-danger: #fb565b;
+  --color-info:   #4cb3d4;
+
+  /* Text — Linear ink scale */
+  --color-snow:      #f7f8f8;
+  --color-parchment: #d0d6e0;
+  --color-slate:     #8a8f98;
+  --color-fog:       #62666d;
+
+  /* Back-compat — old class refs continue to render correctly */
+  --color-sentry-neon:   #00d992;
+  --color-sentry-border: #23252a;
+
+  /* Type stacks (Geist already loaded by next/font in layout.tsx) */
+  --font-sans:    var(--font-geist-sans), -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display: var(--font-geist-sans), -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono:    var(--font-geist-mono), "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
 }
 
-/* ── Custom utility classes ─────────────────────────────────────────── */
-.glitch-text {
+/* ── Body defaults ──────────────────────────────────────────────────── */
+html, body {
+  background-color: var(--color-canvas);
+  color: var(--color-snow);
+  font-family: var(--font-sans);
+  font-feature-settings: "calt", "rlig", "ss01";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: rgba(117, 83, 255, 0.35);
+  color: var(--color-snow);
+}
+
+/* ── Typography utilities ───────────────────────────────────────────── */
+.font-display { font-family: var(--font-display); letter-spacing: -0.02em; }
+.font-mono    { font-family: var(--font-mono); }
+.tabular      { font-variant-numeric: tabular-nums; }
+
+/* Eyebrow / overline labels — Linear spec (subtle, not screaming) */
+.eyebrow {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-slate);
+}
+
+/* ── Elevation — border-defined (Linear), no shadow spam ────────────── */
+.lift-1 {
+  background: var(--color-surface);
+  border: 1px solid var(--color-hairline);
+}
+.lift-2 {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-hairline-strong);
+}
+
+/* Subtle ambient haze — only for the camera frame and hero panels */
+.haze {
+  box-shadow:
+    rgba(0, 0, 0, 0.45) 0px 12px 40px -12px,
+    rgba(255, 255, 255, 0.03) 0px 1px 0px 0px inset;
+}
+
+/* Iris ring — for active/focused hero elements */
+.ring-iris {
+  box-shadow: 0 0 0 1px var(--color-iris), 0 0 24px rgba(117, 83, 255, 0.18);
+}
+
+/* Emerald ring — for SECURE / ACTIVE state on the camera frame */
+.ring-signal {
+  box-shadow: 0 0 0 1px var(--color-signal), 0 0 24px rgba(0, 217, 146, 0.12);
+}
+
+/* Focus ring — Linear-style 2px iris at 50% */
+*:focus-visible {
+  outline: 2px solid rgba(117, 83, 255, 0.55);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Glitch-text — opt-in via data-active="true". No longer always-on. */
+.glitch-text[data-active="true"] {
   position: relative;
 }
-
-.glitch-text::before,
-.glitch-text::after {
+.glitch-text[data-active="true"]::before,
+.glitch-text[data-active="true"]::after {
   content: attr(data-text);
   position: absolute;
   top: 0;
@@ -20,25 +120,56 @@
   height: 100%;
   background: transparent;
 }
-
-.glitch-text::before {
-  left: 2px;
-  text-shadow: -1px 0 red;
-  animation: glitch-anim 2s infinite linear alternate-reverse;
+.glitch-text[data-active="true"]::before {
+  left: 1px;
+  text-shadow: -1px 0 var(--color-danger);
+  animation: glitch-anim 2.4s infinite linear alternate-reverse;
+}
+.glitch-text[data-active="true"]::after {
+  left: -1px;
+  text-shadow: -1px 0 var(--color-info);
+  animation: glitch-anim 3.2s infinite linear alternate-reverse;
 }
 
-.glitch-text::after {
-  left: -2px;
-  text-shadow: -1px 0 blue;
-  animation: glitch-anim 3s infinite linear alternate-reverse;
+/* Subtle dot-grid — for hero / empty-state panels only */
+.dot-grid {
+  background-image: radial-gradient(rgba(184, 179, 176, 0.06) 1px, transparent 1px);
+  background-size: 22px 22px;
 }
+
+/* Custom scrollbar — minimal, on-brand */
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--color-hairline);
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--color-hairline-strong); }
 
 /* ── Keyframes ──────────────────────────────────────────────────────── */
 @keyframes glitch-anim {
-  0%   { clip-path: inset(10% 0 80% 0); transform: translate(-2px,  2px); }
-  20%  { clip-path: inset(80% 0  5% 0); transform: translate( 2px, -2px); }
-  40%  { clip-path: inset(40% 0 40% 0); transform: translate( 2px,  2px); }
-  60%  { clip-path: inset(10% 0 60% 0); transform: translate(-2px, -2px); }
-  80%  { clip-path: inset(30% 0 20% 0); transform: translate( 2px,  2px); }
-  100% { clip-path: inset(50% 0 30% 0); transform: translate(-2px, -2px); }
+  0%   { clip-path: inset(10% 0 80% 0); transform: translate(-1px,  1px); }
+  20%  { clip-path: inset(80% 0  5% 0); transform: translate( 1px, -1px); }
+  40%  { clip-path: inset(40% 0 40% 0); transform: translate( 1px,  1px); }
+  60%  { clip-path: inset(10% 0 60% 0); transform: translate(-1px, -1px); }
+  80%  { clip-path: inset(30% 0 20% 0); transform: translate( 1px,  1px); }
+  100% { clip-path: inset(50% 0 30% 0); transform: translate(-1px, -1px); }
 }
+
+@keyframes pulse-signal {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(0, 217, 146, 0.55); }
+  50%      { box-shadow: 0 0 0 6px rgba(0, 217, 146, 0);    }
+}
+.pulse-signal { animation: pulse-signal 2.2s ease-out infinite; }
+
+@keyframes pulse-iris {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(117, 83, 255, 0.55); }
+  50%      { box-shadow: 0 0 0 6px rgba(117, 83, 255, 0);    }
+}
+.pulse-iris { animation: pulse-iris 2.2s ease-out infinite; }
+
+@keyframes pulse-danger {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(251, 86, 91, 0.6); }
+  50%      { box-shadow: 0 0 0 6px rgba(251, 86, 91, 0);   }
+}
+.pulse-danger { animation: pulse-danger 1.6s ease-out infinite; }
