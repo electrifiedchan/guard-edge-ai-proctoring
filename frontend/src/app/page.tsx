@@ -1,13 +1,19 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import SniperScope, { RiskPacket } from "@/components/SniperScope";
 import VoiceOrb from "@/components/VoiceOrb";
 
 export default function Home() {
+  const router = useRouter();
+  const [sessionStartTime] = useState<number>(Date.now());
   const [hasWarned, setHasWarned] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState("SYSTEM STANDBY. WAITING FOR TRIGGER.");
   const [isTranscribing, setIsTranscribing] = useState(false);
+  
+  const [latestRisk, setLatestRisk] = useState<RiskPacket | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
 
   // Receives live transcripts from VoiceOrb's SpeechRecognition engine
   const handleTranscript = (text: string) => {
@@ -19,7 +25,13 @@ export default function Home() {
 
   // --- THE BRAIN: Vision to Voice to Santiago LLM-Judge ---
   const handleTelemetry = (packet: RiskPacket, verdict: string) => {
+    setLatestRisk(packet);
     
+    // Clear warnings if memory is reset
+    if (packet.risk_score === 0 || packet.intervention_level === "CLEAR") {
+      setHasWarned(false);
+    }
+
     // Trigger at 40% Risk
     if (packet.intervention_level === "HARD_WARNING" && !hasWarned) {
       setHasWarned(true);
@@ -72,15 +84,58 @@ export default function Home() {
     }
   };
 
+  const handleEndSession = async () => {
+    setIsGenerating(true);
+    setLiveTranscript("AI Coach is analyzing your performance...");
+    
+    try {
+      const actualSessionDuration = Math.floor((Date.now() - sessionStartTime) / 1000);
+      
+      const payload = {
+        candidate_id: latestRisk?.candidate_id || "major_project_candidate_01",
+        total_violations: latestRisk?.violation_count || 0,
+        risk_score: latestRisk?.risk_score || 0,
+        session_duration_sec: actualSessionDuration,
+        critical_flags: latestRisk?.critical_flags || []
+      };
+
+      const response = await fetch("http://localhost:8080/generate-verdict", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        localStorage.setItem("verdictData", JSON.stringify(data));
+        router.push("/verdict");
+      } else {
+        setLiveTranscript("ERROR: Failed to generate report.");
+        setIsGenerating(false);
+      }
+    } catch (e) {
+      console.error(e);
+      setLiveTranscript("ERROR: Backend unreachable.");
+      setIsGenerating(false);
+    }
+  };
+
   return (
     <main className="min-h-screen bg-[#050505] flex flex-col p-8 font-mono text-gray-300 items-center overflow-x-hidden">
       
       {/* Top Navigation */}
-      <header className="w-full max-w-[1400px] mb-8 flex items-end border-b border-sentry-border pb-6">
+      <header className="w-full max-w-[1400px] mb-8 flex justify-between items-end border-b border-sentry-border pb-6">
         <div>
           <h1 className="text-4xl font-black tracking-[0.3em] text-white">G.U.A.R.D.</h1>
           <p className="text-[10px] tracking-widest text-sentry-neon mt-2 font-bold">SOVEREIGN EDGE-AI PROCTORING ECOSYSTEM</p>
         </div>
+        <button
+          onClick={handleEndSession}
+          disabled={isGenerating}
+          className="bg-sentry-neon text-black px-6 py-3 font-bold text-sm tracking-widest hover:bg-white hover:text-black transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed uppercase rounded-full"
+        >
+          {isGenerating ? "Analyzing..." : "End Session & Generate Report"}
+        </button>
       </header>
 
       {/* The Unified Dashboard Grid */}

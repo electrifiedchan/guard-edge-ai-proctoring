@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>graphify - graphify-out\graph.html</title>
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0f0f1a; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; display: flex; height: 100vh; overflow: hidden; }
+  #graph { flex: 1; }
+  #sidebar { width: 280px; background: #1a1a2e; border-left: 1px solid #2a2a4e; display: flex; flex-direction: column; overflow: hidden; }
+  #search-wrap { padding: 12px; border-bottom: 1px solid #2a2a4e; }
+  #search { width: 100%; background: #0f0f1a; border: 1px solid #3a3a5e; color: #e0e0e0; padding: 7px 10px; border-radius: 6px; font-size: 13px; outline: none; }
+  #search:focus { border-color: #4E79A7; }
+  #search-results { max-height: 140px; overflow-y: auto; padding: 4px 12px; border-bottom: 1px solid #2a2a4e; display: none; }
+  .search-item { padding: 4px 6px; cursor: pointer; border-radius: 4px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .search-item:hover { background: #2a2a4e; }
+  #info-panel { padding: 14px; border-bottom: 1px solid #2a2a4e; min-height: 140px; }
+  #info-panel h3 { font-size: 13px; color: #aaa; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+  #info-content { font-size: 13px; color: #ccc; line-height: 1.6; }
+  #info-content .field { margin-bottom: 5px; }
+  #info-content .field b { color: #e0e0e0; }
+  #info-content .empty { color: #555; font-style: italic; }
+  .neighbor-link { display: block; padding: 2px 6px; margin: 2px 0; border-radius: 3px; cursor: pointer; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 3px solid #333; }
+  .neighbor-link:hover { background: #2a2a4e; }
+  #neighbors-list { max-height: 160px; overflow-y: auto; margin-top: 4px; }
+  #legend-wrap { flex: 1; overflow-y: auto; padding: 12px; }
+  #legend-wrap h3 { font-size: 13px; color: #aaa; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .legend-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer; border-radius: 4px; font-size: 12px; }
+  .legend-item:hover { background: #2a2a4e; padding-left: 4px; }
+  .legend-item.dimmed { opacity: 0.35; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+  .legend-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .legend-count { color: #666; font-size: 11px; }
+  #stats { padding: 10px 14px; border-top: 1px solid #2a2a4e; font-size: 11px; color: #555; }
+  #legend-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 4px 0; }
+  #legend-controls label { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; color: #aaa; user-select: none; }
+  #legend-controls label:hover { color: #e0e0e0; }
+  .legend-cb, #select-all-cb { appearance: none; -webkit-appearance: none; width: 14px; height: 14px; border: 1.5px solid #3a3a5e; border-radius: 3px; background: #0f0f1a; cursor: pointer; position: relative; flex-shrink: 0; }
+  .legend-cb:checked, #select-all-cb:checked { background: #4E79A7; border-color: #4E79A7; }
+  .legend-cb:checked::after, #select-all-cb:checked::after { content: ''; position: absolute; left: 3.5px; top: 1px; width: 4px; height: 7px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+  #select-all-cb:indeterminate { background: #4E79A7; border-color: #4E79A7; }
+  #select-all-cb:indeterminate::after { content: ''; position: absolute; left: 2px; top: 5px; width: 8px; height: 2px; background: #fff; border: none; transform: none; }
+</style>
+</head>
+<body>
+<div id="graph"></div>
+<div id="sidebar">
+  <div id="search-wrap">
+    <input id="search" type="text" placeholder="Search nodes..." autocomplete="off">
+    <div id="search-results"></div>
+  </div>
+  <div id="info-panel">
+    <h3>Node Info</h3>
+    <div id="info-content"><span class="empty">Click a node to inspect it</span></div>
+  </div>
+  <div id="legend-wrap">
+    <h3>Communities</h3>
+    <div id="legend-controls">
+      <label><input type="checkbox" id="select-all-cb" checked onchange="toggleAllCommunities(!this.checked)">Select All</label>
+    </div>
+    <div id="legend"></div>
+  </div>
+  <div id="stats">57 nodes &middot; 56 edges &middot; 18 communities</div>
+</div>
+<script>
+const RAW_NODES = [{"id": "tailwind_config_ts", "label": "tailwind.config.ts", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 10.0, "font": {"size": 0, "color": "#ffffff"}, "title": "tailwind.config.ts", "community": 12, "community_name": "Community 12", "source_file": "tailwind.config.ts", "file_type": "code", "degree": 0}, {"id": "backend_edge_main_py", "label": "edge_main.py", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 40.0, "font": {"size": 12, "color": "#ffffff"}, "title": "edge_main.py", "community": 1, "community_name": "Community 1", "source_file": "backend\\edge_main.py", "file_type": "code", "degree": 13}, {"id": "backend_edge_main_init_db", "label": "init_db()", "color": {"background": "#FF9DA7", "border": "#FF9DA7", "highlight": {"background": "#ffffff", "border": "#FF9DA7"}}, "size": 14.6, "font": {"size": 12, "color": "#ffffff"}, "title": "init_db()", "community": 7, "community_name": "Community 7", "source_file": "backend\\edge_main.py", "file_type": "code", "degree": 2}, {"id": "backend_edge_main_log_to_db", "label": "log_to_db()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "log_to_db()", "community": 1, "community_name": "Community 1", "source_file": "backend\\edge_main.py", "file_type": "code", "degree": 1}, {"id": "backend_edge_main_lifespan", "label": "lifespan()", "color": {"background": "#FF9DA7", "border": "#FF9DA7", "highlight": {"background": "#ffffff", "border": "#FF9DA7"}}, "size": 14.6, "font": {"size": 12, "color": "#ffffff"}, "title": "lifespan()", "community": 7, "community_name": "Community 7", "source_file": "backend\\edge_main.py", "file_type": "code", "degree": 2}, {"id": "backend_edge_main_determine_verdict", "label": "determine_verdict()", "color": {"background": "#9C755F", "border": "#9C755F", "highlight": {"background": "#ffffff", "border": "#9C755F"}}, "size": 14.6, "font": {"size": 12, "color": "#ffffff"}, "title": "determine_verdict()", "community": 8, "community_name": "Community 8", "source_file": "backend\\edge_main.py", "file_type": "code", "degree": 2}, {"id": "backend_edge_main_framepayload", "label": "FramePayload", "color": {"background": "#59A14F", "border": "#59A14F", "highlight": {"background": "#ffffff", "border": "#59A14F"}}, "size": 14.6, "font": {"size": 12, "color": "#ffffff"}, "title": "FramePayload", "community": 4, "community_name": "Community 4", "source_file": "backend\\edge_main.py", "file_type": "code", "degree": 2}, {"id": "basemodel", "label": "BaseModel", "color": {"background": "#59A14F", "border": "#59A14F", "highlight": {"background": "#ffffff", "border": "#59A14F"}}, "size": 14.6, "font": {"size": 12, "color": "#ffffff"}, "title": "BaseModel", "community": 4, "community_name": "Community 4", "source_file": "", "file_type": "code", "degree": 2}, {"id": "backend_edge_main_analyze_frame", "label": "analyze_frame()", "color": {"background": "#9C755F", "border": "#9C755F", "highlight": {"background": "#ffffff", "border": "#9C755F"}}, "size": 14.6, "font": {"size": 12, "color": "#ffffff"}, "title": "analyze_frame()", "community": 8, "community_name": "Community 8", "source_file": "backend\\edge_main.py", "file_type": "code", "degree": 2}, {"id": "backend_edge_main_get_audit_logs", "label": "get_audit_logs()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "get_audit_logs()", "community": 1, "community_name": "Community 1", "source_file": "backend\\edge_main.py", "file_type": "code", "degree": 1}, {"id": "backend_edge_main_get_autopsy_logs", "label": "get_autopsy_logs()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "get_autopsy_logs()", "community": 1, "community_name": "Community 1", "source_file": "backend\\edge_main.py", "file_type": "code", "degree": 1}, {"id": "backend_edge_main_get_voice_status", "label": "get_voice_status()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "get_voice_status()", "community": 1, "community_name": "Community 1", "source_file": "backend\\edge_main.py", "file_type": "code", "degree": 1}, {"id": "backend_edge_main_finalstats", "label": "FinalStats", "color": {"background": "#59A14F", "border": "#59A14F", "highlight": {"background": "#ffffff", "border": "#59A14F"}}, "size": 14.6, "font": {"size": 12, "color": "#ffffff"}, "title": "FinalStats", "community": 4, "community_name": "Community 4", "source_file": "backend\\edge_main.py", "file_type": "code", "degree": 2}, {"id": "backend_edge_main_generate_verdict", "label": "generate_verdict()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "generate_verdict()", "community": 1, "community_name": "Community 1", "source_file": "backend\\edge_main.py", "file_type": "code", "degree": 1}, {"id": "backend_edge_main_get_candidate_status", "label": "get_candidate_status()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "get_candidate_status()", "community": 1, "community_name": "Community 1", "source_file": "backend\\edge_main.py", "file_type": "code", "degree": 1}, {"id": "backend_edge_main_reset_session", "label": "reset_session()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "reset_session()", "community": 1, "community_name": "Community 1", "source_file": "backend\\edge_main.py", "file_type": "code", "degree": 1}, {"id": "backend_voice_engine_py", "label": "voice_engine.py", "color": {"background": "#76B7B2", "border": "#76B7B2", "highlight": {"background": "#ffffff", "border": "#76B7B2"}}, "size": 16.9, "font": {"size": 12, "color": "#ffffff"}, "title": "voice_engine.py", "community": 3, "community_name": "Community 3", "source_file": "backend\\voice_engine.py", "file_type": "code", "degree": 3}, {"id": "backend_voice_engine_speak", "label": "speak()", "color": {"background": "#76B7B2", "border": "#76B7B2", "highlight": {"background": "#ffffff", "border": "#76B7B2"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "speak()", "community": 3, "community_name": "Community 3", "source_file": "backend\\voice_engine.py", "file_type": "code", "degree": 1}, {"id": "backend_voice_engine_voice_loop", "label": "voice_loop()", "color": {"background": "#76B7B2", "border": "#76B7B2", "highlight": {"background": "#ffffff", "border": "#76B7B2"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "voice_loop()", "community": 3, "community_name": "Community 3", "source_file": "backend\\voice_engine.py", "file_type": "code", "degree": 1}, {"id": "backend_voice_engine_start_voice_loop", "label": "start_voice_loop()", "color": {"background": "#76B7B2", "border": "#76B7B2", "highlight": {"background": "#ffffff", "border": "#76B7B2"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "start_voice_loop()", "community": 3, "community_name": "Community 3", "source_file": "backend\\voice_engine.py", "file_type": "code", "degree": 1}, {"id": "backend_core_memory_bea_py", "label": "bea.py", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "bea.py", "community": 0, "community_name": "Community 0", "source_file": "backend\\core_memory\\bea.py", "file_type": "code", "degree": 1}, {"id": "core_memory_bea_behavioraleventaccumulator", "label": "BehavioralEventAccumulator", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 33.1, "font": {"size": 12, "color": "#ffffff"}, "title": "BehavioralEventAccumulator", "community": 0, "community_name": "Community 0", "source_file": "backend\\core_memory\\bea.py", "file_type": "code", "degree": 10}, {"id": "core_memory_bea_behavioraleventaccumulator_init", "label": ".__init__()", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": ".__init__()", "community": 0, "community_name": "Community 0", "source_file": "backend\\core_memory\\bea.py", "file_type": "code", "degree": 1}, {"id": "core_memory_bea_behavioraleventaccumulator_ensure_candidate", "label": "._ensure_candidate()", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 19.2, "font": {"size": 12, "color": "#ffffff"}, "title": "._ensure_candidate()", "community": 0, "community_name": "Community 0", "source_file": "backend\\core_memory\\bea.py", "file_type": "code", "degree": 4}, {"id": "core_memory_bea_behavioraleventaccumulator_trigger_fatal_lockout", "label": ".trigger_fatal_lockout()", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 19.2, "font": {"size": 12, "color": "#ffffff"}, "title": ".trigger_fatal_lockout()", "community": 0, "community_name": "Community 0", "source_file": "backend\\core_memory\\bea.py", "file_type": "code", "degree": 4}, {"id": "core_memory_bea_behavioraleventaccumulator_record_telemetry", "label": ".record_telemetry()", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 21.5, "font": {"size": 12, "color": "#ffffff"}, "title": ".record_telemetry()", "community": 0, "community_name": "Community 0", "source_file": "backend\\core_memory\\bea.py", "file_type": "code", "degree": 5}, {"id": "core_memory_bea_behavioraleventaccumulator_get_state", "label": ".get_state()", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 19.2, "font": {"size": 12, "color": "#ffffff"}, "title": ".get_state()", "community": 0, "community_name": "Community 0", "source_file": "backend\\core_memory\\bea.py", "file_type": "code", "degree": 4}, {"id": "core_memory_bea_behavioraleventaccumulator_calculate_risk", "label": "._calculate_risk()", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 16.9, "font": {"size": 12, "color": "#ffffff"}, "title": "._calculate_risk()", "community": 0, "community_name": "Community 0", "source_file": "backend\\core_memory\\bea.py", "file_type": "code", "degree": 3}, {"id": "core_memory_bea_behavioraleventaccumulator_generate_locked_state", "label": "._generate_locked_state()", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 19.2, "font": {"size": 12, "color": "#ffffff"}, "title": "._generate_locked_state()", "community": 0, "community_name": "Community 0", "source_file": "backend\\core_memory\\bea.py", "file_type": "code", "degree": 4}, {"id": "core_memory_bea_behavioraleventaccumulator_reset_candidate", "label": ".reset_candidate()", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": ".reset_candidate()", "community": 0, "community_name": "Community 0", "source_file": "backend\\core_memory\\bea.py", "file_type": "code", "degree": 1}, {"id": "core_memory_bea_behavioraleventaccumulator_cleanup_stale_sessions", "label": ".cleanup_stale_sessions()", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": ".cleanup_stale_sessions()", "community": 0, "community_name": "Community 0", "source_file": "backend\\core_memory\\bea.py", "file_type": "code", "degree": 1}, {"id": "core_memory_bea_rationale_21", "label": "Logs a fatal-level violation silently (Mobile Phone / Tab Switch).         Chan", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "Logs a fatal-level violation silently (Mobile Phone / Tab Switch).         Chan", "community": 0, "community_name": "Community 0", "source_file": "backend\\core_memory\\bea.py", "file_type": "rationale", "degree": 1}, {"id": "core_memory_bea_rationale_30", "label": "Evaluates stateless gaze against industry-standard temporal limits.", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "Evaluates stateless gaze against industry-standard temporal limits.", "community": 0, "community_name": "Community 0", "source_file": "backend\\core_memory\\bea.py", "file_type": "rationale", "degree": 1}, {"id": "frontend_eslint_config_mjs", "label": "eslint.config.mjs", "color": {"background": "#76B7B2", "border": "#76B7B2", "highlight": {"background": "#ffffff", "border": "#76B7B2"}}, "size": 10.0, "font": {"size": 0, "color": "#ffffff"}, "title": "eslint.config.mjs", "community": 13, "community_name": "Community 13", "source_file": "frontend\\eslint.config.mjs", "file_type": "code", "degree": 0}, {"id": "frontend_next_env_d_ts", "label": "next-env.d.ts", "color": {"background": "#59A14F", "border": "#59A14F", "highlight": {"background": "#ffffff", "border": "#59A14F"}}, "size": 10.0, "font": {"size": 0, "color": "#ffffff"}, "title": "next-env.d.ts", "community": 14, "community_name": "Community 14", "source_file": "frontend\\next-env.d.ts", "file_type": "code", "degree": 0}, {"id": "frontend_next_config_ts", "label": "next.config.ts", "color": {"background": "#EDC948", "border": "#EDC948", "highlight": {"background": "#ffffff", "border": "#EDC948"}}, "size": 10.0, "font": {"size": 0, "color": "#ffffff"}, "title": "next.config.ts", "community": 15, "community_name": "Community 15", "source_file": "frontend\\next.config.ts", "file_type": "code", "degree": 0}, {"id": "frontend_postcss_config_mjs", "label": "postcss.config.mjs", "color": {"background": "#B07AA1", "border": "#B07AA1", "highlight": {"background": "#ffffff", "border": "#B07AA1"}}, "size": 10.0, "font": {"size": 0, "color": "#ffffff"}, "title": "postcss.config.mjs", "community": 16, "community_name": "Community 16", "source_file": "frontend\\postcss.config.mjs", "file_type": "code", "degree": 0}, {"id": "frontend_src_app_layout_tsx", "label": "layout.tsx", "color": {"background": "#BAB0AC", "border": "#BAB0AC", "highlight": {"background": "#ffffff", "border": "#BAB0AC"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "layout.tsx", "community": 9, "community_name": "Community 9", "source_file": "frontend\\src\\app\\layout.tsx", "file_type": "code", "degree": 1}, {"id": "app_layout_rootlayout", "label": "RootLayout()", "color": {"background": "#BAB0AC", "border": "#BAB0AC", "highlight": {"background": "#ffffff", "border": "#BAB0AC"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "RootLayout()", "community": 9, "community_name": "Community 9", "source_file": "frontend\\src\\app\\layout.tsx", "file_type": "code", "degree": 1}, {"id": "frontend_src_app_page_tsx", "label": "page.tsx", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "page.tsx", "community": 10, "community_name": "Community 10", "source_file": "frontend\\src\\app\\page.tsx", "file_type": "code", "degree": 1}, {"id": "app_page_home", "label": "Home()", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "Home()", "community": 10, "community_name": "Community 10", "source_file": "frontend\\src\\app\\page.tsx", "file_type": "code", "degree": 1}, {"id": "frontend_src_app_autopsy_page_tsx", "label": "page.tsx", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "page.tsx", "community": 11, "community_name": "Community 11", "source_file": "frontend\\src\\app\\autopsy\\page.tsx", "file_type": "code", "degree": 1}, {"id": "autopsy_page_autopsypage", "label": "AutopsyPage()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "AutopsyPage()", "community": 11, "community_name": "Community 11", "source_file": "frontend\\src\\app\\autopsy\\page.tsx", "file_type": "code", "degree": 1}, {"id": "frontend_src_app_verdict_page_tsx", "label": "page.tsx", "color": {"background": "#FF9DA7", "border": "#FF9DA7", "highlight": {"background": "#ffffff", "border": "#FF9DA7"}}, "size": 10.0, "font": {"size": 0, "color": "#ffffff"}, "title": "page.tsx", "community": 17, "community_name": "Community 17", "source_file": "frontend\\src\\app\\verdict\\page.tsx", "file_type": "code", "degree": 0}, {"id": "frontend_src_components_audittrail_tsx", "label": "AuditTrail.tsx", "color": {"background": "#EDC948", "border": "#EDC948", "highlight": {"background": "#ffffff", "border": "#EDC948"}}, "size": 14.6, "font": {"size": 12, "color": "#ffffff"}, "title": "AuditTrail.tsx", "community": 5, "community_name": "Community 5", "source_file": "frontend\\src\\components\\AuditTrail.tsx", "file_type": "code", "degree": 2}, {"id": "components_audittrail_fetchlogs", "label": "fetchLogs()", "color": {"background": "#EDC948", "border": "#EDC948", "highlight": {"background": "#ffffff", "border": "#EDC948"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "fetchLogs()", "community": 5, "community_name": "Community 5", "source_file": "frontend\\src\\components\\AuditTrail.tsx", "file_type": "code", "degree": 1}, {"id": "components_audittrail_getinterventioncolor", "label": "getInterventionColor()", "color": {"background": "#EDC948", "border": "#EDC948", "highlight": {"background": "#ffffff", "border": "#EDC948"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "getInterventionColor()", "community": 5, "community_name": "Community 5", "source_file": "frontend\\src\\components\\AuditTrail.tsx", "file_type": "code", "degree": 1}, {"id": "frontend_src_components_sniperscope_tsx", "label": "SniperScope.tsx", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 23.8, "font": {"size": 12, "color": "#ffffff"}, "title": "SniperScope.tsx", "community": 2, "community_name": "Community 2", "source_file": "frontend\\src\\components\\SniperScope.tsx", "file_type": "code", "degree": 6}, {"id": "components_sniperscope_checkhardware", "label": "checkHardware()", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 14.6, "font": {"size": 12, "color": "#ffffff"}, "title": "checkHardware()", "community": 2, "community_name": "Community 2", "source_file": "frontend\\src\\components\\SniperScope.tsx", "file_type": "code", "degree": 2}, {"id": "components_sniperscope_initgatekeeper", "label": "initGatekeeper()", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 14.6, "font": {"size": 12, "color": "#ffffff"}, "title": "initGatekeeper()", "community": 2, "community_name": "Community 2", "source_file": "frontend\\src\\components\\SniperScope.tsx", "file_type": "code", "degree": 2}, {"id": "components_sniperscope_startcamera", "label": "startCamera()", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 16.9, "font": {"size": 12, "color": "#ffffff"}, "title": "startCamera()", "community": 2, "community_name": "Community 2", "source_file": "frontend\\src\\components\\SniperScope.tsx", "file_type": "code", "degree": 3}, {"id": "components_sniperscope_showtoast", "label": "showToast()", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 14.6, "font": {"size": 12, "color": "#ffffff"}, "title": "showToast()", "community": 2, "community_name": "Community 2", "source_file": "frontend\\src\\components\\SniperScope.tsx", "file_type": "code", "degree": 2}, {"id": "components_sniperscope_handlereset", "label": "handleReset()", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 14.6, "font": {"size": 12, "color": "#ffffff"}, "title": "handleReset()", "community": 2, "community_name": "Community 2", "source_file": "frontend\\src\\components\\SniperScope.tsx", "file_type": "code", "degree": 2}, {"id": "components_sniperscope_stopcamera", "label": "stopCamera()", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "stopCamera()", "community": 2, "community_name": "Community 2", "source_file": "frontend\\src\\components\\SniperScope.tsx", "file_type": "code", "degree": 1}, {"id": "frontend_src_components_voiceorb_tsx", "label": "VoiceOrb.tsx", "color": {"background": "#B07AA1", "border": "#B07AA1", "highlight": {"background": "#ffffff", "border": "#B07AA1"}}, "size": 14.6, "font": {"size": 12, "color": "#ffffff"}, "title": "VoiceOrb.tsx", "community": 6, "community_name": "Community 6", "source_file": "frontend\\src\\components\\VoiceOrb.tsx", "file_type": "code", "degree": 2}, {"id": "components_voiceorb_fetchvoicestatus", "label": "fetchVoiceStatus()", "color": {"background": "#B07AA1", "border": "#B07AA1", "highlight": {"background": "#ffffff", "border": "#B07AA1"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "fetchVoiceStatus()", "community": 6, "community_name": "Community 6", "source_file": "frontend\\src\\components\\VoiceOrb.tsx", "file_type": "code", "degree": 1}, {"id": "components_voiceorb_getorbvisuals", "label": "getOrbVisuals()", "color": {"background": "#B07AA1", "border": "#B07AA1", "highlight": {"background": "#ffffff", "border": "#B07AA1"}}, "size": 12.3, "font": {"size": 0, "color": "#ffffff"}, "title": "getOrbVisuals()", "community": 6, "community_name": "Community 6", "source_file": "frontend\\src\\components\\VoiceOrb.tsx", "file_type": "code", "degree": 1}];
+const RAW_EDGES = [{"from": "backend_edge_main_py", "to": "backend_edge_main_init_db", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_edge_main_py", "to": "backend_edge_main_log_to_db", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_edge_main_py", "to": "backend_edge_main_lifespan", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_edge_main_py", "to": "backend_edge_main_determine_verdict", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_edge_main_py", "to": "backend_edge_main_framepayload", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_edge_main_py", "to": "backend_edge_main_analyze_frame", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_edge_main_py", "to": "backend_edge_main_get_audit_logs", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_edge_main_py", "to": "backend_edge_main_get_autopsy_logs", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_edge_main_py", "to": "backend_edge_main_get_voice_status", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_edge_main_py", "to": "backend_edge_main_finalstats", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_edge_main_py", "to": "backend_edge_main_generate_verdict", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_edge_main_py", "to": "backend_edge_main_get_candidate_status", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_edge_main_py", "to": "backend_edge_main_reset_session", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_edge_main_lifespan", "to": "backend_edge_main_init_db", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_edge_main_analyze_frame", "to": "backend_edge_main_determine_verdict", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_edge_main_framepayload", "to": "basemodel", "label": "inherits", "title": "inherits [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_edge_main_finalstats", "to": "basemodel", "label": "inherits", "title": "inherits [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_voice_engine_py", "to": "backend_voice_engine_speak", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_voice_engine_py", "to": "backend_voice_engine_voice_loop", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_voice_engine_py", "to": "backend_voice_engine_start_voice_loop", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "backend_core_memory_bea_py", "to": "core_memory_bea_behavioraleventaccumulator", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_behavioraleventaccumulator", "to": "core_memory_bea_behavioraleventaccumulator_init", "label": "method", "title": "method [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_behavioraleventaccumulator", "to": "core_memory_bea_behavioraleventaccumulator_ensure_candidate", "label": "method", "title": "method [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_behavioraleventaccumulator", "to": "core_memory_bea_behavioraleventaccumulator_trigger_fatal_lockout", "label": "method", "title": "method [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_behavioraleventaccumulator", "to": "core_memory_bea_behavioraleventaccumulator_record_telemetry", "label": "method", "title": "method [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_behavioraleventaccumulator", "to": "core_memory_bea_behavioraleventaccumulator_get_state", "label": "method", "title": "method [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_behavioraleventaccumulator", "to": "core_memory_bea_behavioraleventaccumulator_calculate_risk", "label": "method", "title": "method [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_behavioraleventaccumulator", "to": "core_memory_bea_behavioraleventaccumulator_generate_locked_state", "label": "method", "title": "method [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_behavioraleventaccumulator", "to": "core_memory_bea_behavioraleventaccumulator_reset_candidate", "label": "method", "title": "method [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_behavioraleventaccumulator", "to": "core_memory_bea_behavioraleventaccumulator_cleanup_stale_sessions", "label": "method", "title": "method [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_behavioraleventaccumulator_trigger_fatal_lockout", "to": "core_memory_bea_behavioraleventaccumulator_ensure_candidate", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_behavioraleventaccumulator_record_telemetry", "to": "core_memory_bea_behavioraleventaccumulator_ensure_candidate", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_behavioraleventaccumulator_get_state", "to": "core_memory_bea_behavioraleventaccumulator_ensure_candidate", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_behavioraleventaccumulator_trigger_fatal_lockout", "to": "core_memory_bea_behavioraleventaccumulator_generate_locked_state", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_rationale_21", "to": "core_memory_bea_behavioraleventaccumulator_trigger_fatal_lockout", "label": "rationale_for", "title": "rationale_for [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_behavioraleventaccumulator_record_telemetry", "to": "core_memory_bea_behavioraleventaccumulator_generate_locked_state", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_behavioraleventaccumulator_record_telemetry", "to": "core_memory_bea_behavioraleventaccumulator_calculate_risk", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_rationale_30", "to": "core_memory_bea_behavioraleventaccumulator_record_telemetry", "label": "rationale_for", "title": "rationale_for [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_behavioraleventaccumulator_get_state", "to": "core_memory_bea_behavioraleventaccumulator_generate_locked_state", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "core_memory_bea_behavioraleventaccumulator_get_state", "to": "core_memory_bea_behavioraleventaccumulator_calculate_risk", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "frontend_src_app_layout_tsx", "to": "app_layout_rootlayout", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "frontend_src_app_page_tsx", "to": "app_page_home", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "frontend_src_app_autopsy_page_tsx", "to": "autopsy_page_autopsypage", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "frontend_src_components_audittrail_tsx", "to": "components_audittrail_fetchlogs", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "frontend_src_components_audittrail_tsx", "to": "components_audittrail_getinterventioncolor", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "frontend_src_components_sniperscope_tsx", "to": "components_sniperscope_checkhardware", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "frontend_src_components_sniperscope_tsx", "to": "components_sniperscope_initgatekeeper", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "frontend_src_components_sniperscope_tsx", "to": "components_sniperscope_startcamera", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "frontend_src_components_sniperscope_tsx", "to": "components_sniperscope_showtoast", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "frontend_src_components_sniperscope_tsx", "to": "components_sniperscope_handlereset", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "frontend_src_components_sniperscope_tsx", "to": "components_sniperscope_stopcamera", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "components_sniperscope_startcamera", "to": "components_sniperscope_checkhardware", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "components_sniperscope_startcamera", "to": "components_sniperscope_initgatekeeper", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "components_sniperscope_handlereset", "to": "components_sniperscope_showtoast", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "frontend_src_components_voiceorb_tsx", "to": "components_voiceorb_fetchvoicestatus", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "frontend_src_components_voiceorb_tsx", "to": "components_voiceorb_getorbvisuals", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}];
+const LEGEND = [{"cid": 0, "color": "#4E79A7", "label": "Community 0", "count": 13}, {"cid": 1, "color": "#F28E2B", "label": "Community 1", "count": 8}, {"cid": 2, "color": "#E15759", "label": "Community 2", "count": 7}, {"cid": 3, "color": "#76B7B2", "label": "Community 3", "count": 4}, {"cid": 4, "color": "#59A14F", "label": "Community 4", "count": 3}, {"cid": 5, "color": "#EDC948", "label": "Community 5", "count": 3}, {"cid": 6, "color": "#B07AA1", "label": "Community 6", "count": 3}, {"cid": 7, "color": "#FF9DA7", "label": "Community 7", "count": 2}, {"cid": 8, "color": "#9C755F", "label": "Community 8", "count": 2}, {"cid": 9, "color": "#BAB0AC", "label": "Community 9", "count": 2}, {"cid": 10, "color": "#4E79A7", "label": "Community 10", "count": 2}, {"cid": 11, "color": "#F28E2B", "label": "Community 11", "count": 2}, {"cid": 12, "color": "#E15759", "label": "Community 12", "count": 1}, {"cid": 13, "color": "#76B7B2", "label": "Community 13", "count": 1}, {"cid": 14, "color": "#59A14F", "label": "Community 14", "count": 1}, {"cid": 15, "color": "#EDC948", "label": "Community 15", "count": 1}, {"cid": 16, "color": "#B07AA1", "label": "Community 16", "count": 1}, {"cid": 17, "color": "#FF9DA7", "label": "Community 17", "count": 1}];
+
+// HTML-escape helper — prevents XSS when injecting graph data into innerHTML
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// Build vis datasets
+const nodesDS = new vis.DataSet(RAW_NODES.map(n => ({
+  id: n.id, label: n.label, color: n.color, size: n.size,
+  font: n.font, title: n.title,
+  _community: n.community, _community_name: n.community_name,
+  _source_file: n.source_file, _file_type: n.file_type, _degree: n.degree,
+})));
+
+const edgesDS = new vis.DataSet(RAW_EDGES.map((e, i) => ({
+  id: i, from: e.from, to: e.to,
+  label: '',
+  title: e.title,
+  dashes: e.dashes,
+  width: e.width,
+  color: e.color,
+  arrows: { to: { enabled: true, scaleFactor: 0.5 } },
+})));
+
+const container = document.getElementById('graph');
+const network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, {
+  physics: {
+    enabled: true,
+    solver: 'forceAtlas2Based',
+    forceAtlas2Based: {
+      gravitationalConstant: -60,
+      centralGravity: 0.005,
+      springLength: 120,
+      springConstant: 0.08,
+      damping: 0.4,
+      avoidOverlap: 0.8,
+    },
+    stabilization: { iterations: 200, fit: true },
+  },
+  interaction: {
+    hover: true,
+    tooltipDelay: 100,
+    hideEdgesOnDrag: true,
+    navigationButtons: false,
+    keyboard: false,
+  },
+  nodes: { shape: 'dot', borderWidth: 1.5 },
+  edges: { smooth: { type: 'continuous', roundness: 0.2 }, selectionWidth: 3 },
+});
+
+network.once('stabilizationIterationsDone', () => {
+  network.setOptions({ physics: { enabled: false } });
+});
+
+function showInfo(nodeId) {
+  const n = nodesDS.get(nodeId);
+  if (!n) return;
+  const neighborIds = network.getConnectedNodes(nodeId);
+  const neighborItems = neighborIds.map(nid => {
+    const nb = nodesDS.get(nid);
+    const color = nb ? nb.color.background : '#555';
+    return `<span class="neighbor-link" style="border-left-color:${esc(color)}" onclick="focusNode(${JSON.stringify(nid)})">${esc(nb ? nb.label : nid)}</span>`;
+  }).join('');
+  document.getElementById('info-content').innerHTML = `
+    <div class="field"><b>${esc(n.label)}</b></div>
+    <div class="field">Type: ${esc(n._file_type || 'unknown')}</div>
+    <div class="field">Community: ${esc(n._community_name)}</div>
+    <div class="field">Source: ${esc(n._source_file || '-')}</div>
+    <div class="field">Degree: ${n._degree}</div>
+    ${neighborIds.length ? `<div class="field" style="margin-top:8px;color:#aaa;font-size:11px">Neighbors (${neighborIds.length})</div><div id="neighbors-list">${neighborItems}</div>` : ''}
+  `;
+}
+
+function focusNode(nodeId) {
+  network.focus(nodeId, { scale: 1.4, animation: true });
+  network.selectNodes([nodeId]);
+  showInfo(nodeId);
+}
+
+// Track hovered node — hover detection is more reliable than click params
+let hoveredNodeId = null;
+network.on('hoverNode', params => {
+  hoveredNodeId = params.node;
+  container.style.cursor = 'pointer';
+});
+network.on('blurNode', () => {
+  hoveredNodeId = null;
+  container.style.cursor = 'default';
+});
+container.addEventListener('click', () => {
+  if (hoveredNodeId !== null) {
+    showInfo(hoveredNodeId);
+    network.selectNodes([hoveredNodeId]);
+  }
+});
+network.on('click', params => {
+  if (params.nodes.length > 0) {
+    showInfo(params.nodes[0]);
+  } else if (hoveredNodeId === null) {
+    document.getElementById('info-content').innerHTML = '<span class="empty">Click a node to inspect it</span>';
+  }
+});
+
+const searchInput = document.getElementById('search');
+const searchResults = document.getElementById('search-results');
+searchInput.addEventListener('input', () => {
+  const q = searchInput.value.toLowerCase().trim();
+  searchResults.innerHTML = '';
+  if (!q) { searchResults.style.display = 'none'; return; }
+  const matches = RAW_NODES.filter(n => n.label.toLowerCase().includes(q)).slice(0, 20);
+  if (!matches.length) { searchResults.style.display = 'none'; return; }
+  searchResults.style.display = 'block';
+  matches.forEach(n => {
+    const el = document.createElement('div');
+    el.className = 'search-item';
+    el.textContent = n.label;
+    el.style.borderLeft = `3px solid ${n.color.background}`;
+    el.style.paddingLeft = '8px';
+    el.onclick = () => {
+      network.focus(n.id, { scale: 1.5, animation: true });
+      network.selectNodes([n.id]);
+      showInfo(n.id);
+      searchResults.style.display = 'none';
+      searchInput.value = '';
+    };
+    searchResults.appendChild(el);
+  });
+});
+document.addEventListener('click', e => {
+  if (!searchResults.contains(e.target) && e.target !== searchInput)
+    searchResults.style.display = 'none';
+});
+
+const hiddenCommunities = new Set();
+
+const selectAllCb = document.getElementById('select-all-cb');
+
+function updateSelectAllState() {
+  const total = LEGEND.length;
+  const hidden = hiddenCommunities.size;
+  selectAllCb.checked = hidden === 0;
+  selectAllCb.indeterminate = hidden > 0 && hidden < total;
+}
+
+function toggleAllCommunities(hide) {
+  document.querySelectorAll('.legend-item').forEach(item => {
+    hide ? item.classList.add('dimmed') : item.classList.remove('dimmed');
+  });
+  document.querySelectorAll('.legend-cb').forEach(cb => {
+    cb.checked = !hide;
+  });
+  LEGEND.forEach(c => {
+    if (hide) hiddenCommunities.add(c.cid); else hiddenCommunities.delete(c.cid);
+  });
+  const updates = RAW_NODES.map(n => ({ id: n.id, hidden: hide }));
+  nodesDS.update(updates);
+  updateSelectAllState();
+}
+
+const legendEl = document.getElementById('legend');
+LEGEND.forEach(c => {
+  const item = document.createElement('div');
+  item.className = 'legend-item';
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.className = 'legend-cb';
+  cb.checked = true;
+  cb.addEventListener('change', (e) => {
+    e.stopPropagation();
+    if (cb.checked) {
+      hiddenCommunities.delete(c.cid);
+      item.classList.remove('dimmed');
+    } else {
+      hiddenCommunities.add(c.cid);
+      item.classList.add('dimmed');
+    }
+    const updates = RAW_NODES
+      .filter(n => n.community === c.cid)
+      .map(n => ({ id: n.id, hidden: !cb.checked }));
+    nodesDS.update(updates);
+    updateSelectAllState();
+  });
+  item.innerHTML = `<div class="legend-dot" style="background:${c.color}"></div>
+    <span class="legend-label">${c.label}</span>
+    <span class="legend-count">${c.count}</span>`;
+  item.prepend(cb);
+  item.onclick = (e) => {
+    if (e.target === cb) return;
+    cb.checked = !cb.checked;
+    cb.dispatchEvent(new Event('change'));
+  };
+  legendEl.appendChild(item);
+});
+</script>
+<script>
+// Render hyperedges as shaded regions
+const hyperedges = [];
+// afterDrawing passes ctx already transformed to network coordinate space.
+// Draw node positions raw — no manual pan/zoom/DPR math needed.
+network.on('afterDrawing', function(ctx) {
+    hyperedges.forEach(h => {
+        const positions = h.nodes
+            .map(nid => network.getPositions([nid])[nid])
+            .filter(p => p !== undefined);
+        if (positions.length < 2) return;
+        ctx.save();
+        ctx.globalAlpha = 0.12;
+        ctx.fillStyle = '#6366f1';
+        ctx.strokeStyle = '#6366f1';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        // Centroid and expanded hull in network coordinates
+        const cx = positions.reduce((s, p) => s + p.x, 0) / positions.length;
+        const cy = positions.reduce((s, p) => s + p.y, 0) / positions.length;
+        const expanded = positions.map(p => ({
+            x: cx + (p.x - cx) * 1.15,
+            y: cy + (p.y - cy) * 1.15
+        }));
+        ctx.moveTo(expanded[0].x, expanded[0].y);
+        expanded.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalAlpha = 0.4;
+        ctx.stroke();
+        // Label
+        ctx.globalAlpha = 0.8;
+        ctx.fillStyle = '#4f46e5';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(h.label, cx, cy - 5);
+        ctx.restore();
+    });
+});
+</script>
+</body>
+</html>

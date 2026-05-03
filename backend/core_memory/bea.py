@@ -14,13 +14,17 @@ class BehavioralEventAccumulator:
                 "events": [], 
                 "is_locked": False,
                 "consecutive_down": 0,  # Pitch tracker
-                "consecutive_side": 0   # Yaw tracker
+                "consecutive_side": 0,  # Yaw tracker
+                "critical_flags": []    # Fatal reasons
             }
 
-    async def trigger_fatal_lockout(self, candidate_id: str) -> dict:
-        """Logs a fatal-level violation silently (Mobile Phone / Tab Switch)."""
+    async def trigger_fatal_lockout(self, candidate_id: str, reason: str = "") -> dict:
+        """Logs a fatal-level violation silently (Mobile Phone / Tab Switch).
+        Changes state to locked so it permanently stays locked until reset."""
         async with self.lock:
             await self._ensure_candidate(candidate_id)
+            self.memory[candidate_id]["is_locked"] = True
+            self.memory[candidate_id]["critical_flags"].append(reason)
             return self._generate_locked_state(candidate_id)
 
     # [ELITE UPGRADE]: Temporal Threshold Logic
@@ -118,16 +122,19 @@ class BehavioralEventAccumulator:
             "candidate_id": candidate_id,
             "risk_score": risk_score,
             "violation_count": count,
+            "critical_flags": self.memory.get(candidate_id, {}).get("critical_flags", []),
             "intervention_level": level,
             "is_locked": False,
             "autopsy_flag": autopsy_flag
         }
 
     def _generate_locked_state(self, candidate_id: str) -> dict:
+        memory = self.memory.get(candidate_id, {})
         return {
             "candidate_id": candidate_id,
             "risk_score": 100,
-            "violation_count": len(self.memory.get(candidate_id, {}).get("events", [])),
+            "violation_count": len(memory.get("events", [])),
+            "critical_flags": memory.get("critical_flags", []),
             "intervention_level": "SEVERE_VIOLATION_LOGGED",
             "is_locked": False,
             "autopsy_flag": True
@@ -136,7 +143,7 @@ class BehavioralEventAccumulator:
     async def reset_candidate(self, candidate_id: str):
         async with self.lock:
             if candidate_id in self.memory:
-                self.memory[candidate_id] = {"events": [], "is_locked": False, "consecutive_down": 0, "consecutive_side": 0}
+                self.memory[candidate_id] = {"events": [], "is_locked": False, "consecutive_down": 0, "consecutive_side": 0, "critical_flags": []}
 
     async def cleanup_stale_sessions(self):
         current_time = time.time()

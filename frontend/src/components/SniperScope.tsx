@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 
 export interface RiskPacket {
   candidate_id: string;
   risk_score: number;
   violation_count: number;
+  critical_flags?: string[];
   intervention_level: "CLEAR" | "SOFT_WARNING" | "HARD_WARNING" | "WARNING_LOGGED" | "SEVERE_VIOLATION_LOGGED";
 }
 
@@ -27,6 +28,7 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
   const [violationCount, setViolationCount] = useState(0);
   const [interventionLevel, setInterventionLevel] = useState("CLEAR");
   const [latestVerdict, setLatestVerdict] = useState("SYSTEM STANDBY");
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
   const CANDIDATE_ID = "major_project_candidate_01";
 
@@ -204,6 +206,41 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
     }
   };
 
+  const showToast = (message: string, type: "success" | "error") => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const handleReset = async () => {
+    if (riskScore === 0 && violationCount === 0 && interventionLevel === "CLEAR") {
+      showToast("NO DATA TO CLEAR!", "error");
+      return;
+    }
+
+    try {
+      const response = await fetch("http://localhost:8080/reset-session?candidate_id=" + CANDIDATE_ID, {
+        method: "POST"
+      });
+      if (response.ok) {
+        setRiskScore(0);
+        setViolationCount(0);
+        setInterventionLevel("CLEAR");
+        setLatestVerdict("SYSTEM STANDBY");
+        showToast("MEMORY CLEARED SUCCESSFULLY.", "success");
+        console.log("Memory reset successfully.");
+        // Ensure parent component un-flags warning too
+        onTelemetryUpdate({
+          candidate_id: CANDIDATE_ID,
+          risk_score: 0,
+          violation_count: 0,
+          intervention_level: "CLEAR"
+        }, "SYSTEM STANDBY");
+      }
+    } catch (err) {
+      console.error("Failed to reset session:", err);
+    }
+  };
+
   const stopCamera = () => {
     if (gatekeeperRef.current) {
       // @ts-ignore
@@ -302,8 +339,33 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
 
 
   return (
-    <div className="w-full flex flex-col xl:flex-row gap-8 items-start">
+    <div className="w-full flex flex-col xl:flex-row gap-8 items-start relative">
       
+      {/* Vercel/Linear Inspired Toast Notification */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -10, scale: 0.95 }}
+            transition={{ duration: 0.2 }}
+            className={`absolute top-0 right-0 z-50 px-4 py-3 min-w-[250px] rounded-lg border font-mono text-xs font-bold tracking-widest backdrop-blur-xl shadow-2xl flex items-center justify-between
+              ${toast.type === "error" 
+                ? "bg-[#1a0505]/80 border-red-500/50 text-red-400" 
+                : "bg-[#051a0a]/80 border-sentry-neon/50 text-sentry-neon"}`}
+          >
+            <span className="flex items-center gap-2">
+              {toast.type === "error" ? (
+                <span className="text-red-500 animate-pulse">⚠️</span>
+              ) : (
+                <span className="w-2 h-2 rounded-full bg-sentry-neon shadow-[0_0_8px_#00FF41]"></span>
+              )}
+              {toast.message}
+            </span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* LEFT: THE OPTICS FEED */}
       <div className="relative w-full xl:w-[800px] h-[450px] bg-[#0A0A0B] rounded-xl border border-sentry-border overflow-hidden flex-shrink-0 shadow-2xl">
         
@@ -371,10 +433,18 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
         <div className="border border-sentry-border bg-[#0A0A0B] p-6 rounded-xl relative overflow-hidden group hover:border-sentry-border/80 transition-colors">
           <div className="absolute inset-0 bg-gradient-to-br from-white/[0.02] to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
           
-          <h3 className="text-[10px] tracking-widest text-gray-500 mb-6 flex items-center gap-2">
-            <span className="w-1 h-1 bg-gray-500 rounded-full" />
-            BEA TEMPORAL GRAPH
-          </h3>
+          <div className="flex justify-between items-start mb-6">
+            <h3 className="text-[10px] tracking-widest text-gray-500 flex items-center gap-2">
+              <span className="w-1 h-1 bg-gray-500 rounded-full" />
+              BEA TEMPORAL GRAPH
+            </h3>
+            <button 
+              onClick={handleReset}
+              className="text-[9px] font-bold tracking-widest text-red-500 border border-red-500/30 bg-red-500/10 px-3 py-1.5 rounded hover:bg-red-500 hover:text-black transition-all duration-300 z-30 relative"
+            >
+              [ CLEAR MEMORY ]
+            </button>
+          </div>
           
           <div className="flex flex-col mb-8">
             <span className="text-[10px] tracking-widest text-gray-600 mb-2">CUMULATIVE RISK</span>
