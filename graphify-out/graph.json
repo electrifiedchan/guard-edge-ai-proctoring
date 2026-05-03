@@ -1,0 +1,1096 @@
+{
+  "directed": false,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "label": "tailwind.config.ts",
+      "file_type": "code",
+      "source_file": "tailwind.config.ts",
+      "source_location": "L1",
+      "id": "tailwind_config_ts",
+      "community": 12,
+      "norm_label": "tailwind.config.ts"
+    },
+    {
+      "label": "edge_main.py",
+      "file_type": "code",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L1",
+      "id": "backend_edge_main_py",
+      "community": 1,
+      "norm_label": "edge_main.py"
+    },
+    {
+      "label": "init_db()",
+      "file_type": "code",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L25",
+      "id": "backend_edge_main_init_db",
+      "community": 7,
+      "norm_label": "init_db()"
+    },
+    {
+      "label": "log_to_db()",
+      "file_type": "code",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L42",
+      "id": "backend_edge_main_log_to_db",
+      "community": 1,
+      "norm_label": "log_to_db()"
+    },
+    {
+      "label": "lifespan()",
+      "file_type": "code",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L56",
+      "id": "backend_edge_main_lifespan",
+      "community": 7,
+      "norm_label": "lifespan()"
+    },
+    {
+      "label": "determine_verdict()",
+      "file_type": "code",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L77",
+      "id": "backend_edge_main_determine_verdict",
+      "community": 8,
+      "norm_label": "determine_verdict()"
+    },
+    {
+      "label": "FramePayload",
+      "file_type": "code",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L113",
+      "id": "backend_edge_main_framepayload",
+      "community": 4,
+      "norm_label": "framepayload"
+    },
+    {
+      "label": "BaseModel",
+      "file_type": "code",
+      "source_file": "",
+      "source_location": "",
+      "id": "basemodel",
+      "community": 4,
+      "norm_label": "basemodel"
+    },
+    {
+      "label": "analyze_frame()",
+      "file_type": "code",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L122",
+      "id": "backend_edge_main_analyze_frame",
+      "community": 8,
+      "norm_label": "analyze_frame()"
+    },
+    {
+      "label": "get_audit_logs()",
+      "file_type": "code",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L194",
+      "id": "backend_edge_main_get_audit_logs",
+      "community": 1,
+      "norm_label": "get_audit_logs()"
+    },
+    {
+      "label": "get_autopsy_logs()",
+      "file_type": "code",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L210",
+      "id": "backend_edge_main_get_autopsy_logs",
+      "community": 1,
+      "norm_label": "get_autopsy_logs()"
+    },
+    {
+      "label": "get_voice_status()",
+      "file_type": "code",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L230",
+      "id": "backend_edge_main_get_voice_status",
+      "community": 1,
+      "norm_label": "get_voice_status()"
+    },
+    {
+      "label": "FinalStats",
+      "file_type": "code",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L233",
+      "id": "backend_edge_main_finalstats",
+      "community": 4,
+      "norm_label": "finalstats"
+    },
+    {
+      "label": "generate_verdict()",
+      "file_type": "code",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L240",
+      "id": "backend_edge_main_generate_verdict",
+      "community": 1,
+      "norm_label": "generate_verdict()"
+    },
+    {
+      "label": "get_candidate_status()",
+      "file_type": "code",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L274",
+      "id": "backend_edge_main_get_candidate_status",
+      "community": 1,
+      "norm_label": "get_candidate_status()"
+    },
+    {
+      "label": "reset_session()",
+      "file_type": "code",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L278",
+      "id": "backend_edge_main_reset_session",
+      "community": 1,
+      "norm_label": "reset_session()"
+    },
+    {
+      "label": "voice_engine.py",
+      "file_type": "code",
+      "source_file": "backend\\voice_engine.py",
+      "source_location": "L1",
+      "id": "backend_voice_engine_py",
+      "community": 3,
+      "norm_label": "voice_engine.py"
+    },
+    {
+      "label": "speak()",
+      "file_type": "code",
+      "source_file": "backend\\voice_engine.py",
+      "source_location": "L23",
+      "id": "backend_voice_engine_speak",
+      "community": 3,
+      "norm_label": "speak()"
+    },
+    {
+      "label": "voice_loop()",
+      "file_type": "code",
+      "source_file": "backend\\voice_engine.py",
+      "source_location": "L39",
+      "id": "backend_voice_engine_voice_loop",
+      "community": 3,
+      "norm_label": "voice_loop()"
+    },
+    {
+      "label": "start_voice_loop()",
+      "file_type": "code",
+      "source_file": "backend\\voice_engine.py",
+      "source_location": "L82",
+      "id": "backend_voice_engine_start_voice_loop",
+      "community": 3,
+      "norm_label": "start_voice_loop()"
+    },
+    {
+      "label": "bea.py",
+      "file_type": "code",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L1",
+      "id": "backend_core_memory_bea_py",
+      "community": 0,
+      "norm_label": "bea.py"
+    },
+    {
+      "label": "BehavioralEventAccumulator",
+      "file_type": "code",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L5",
+      "id": "core_memory_bea_behavioraleventaccumulator",
+      "community": 0,
+      "norm_label": "behavioraleventaccumulator"
+    },
+    {
+      "label": ".__init__()",
+      "file_type": "code",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L6",
+      "id": "core_memory_bea_behavioraleventaccumulator_init",
+      "community": 0,
+      "norm_label": ".__init__()"
+    },
+    {
+      "label": "._ensure_candidate()",
+      "file_type": "code",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L11",
+      "id": "core_memory_bea_behavioraleventaccumulator_ensure_candidate",
+      "community": 0,
+      "norm_label": "._ensure_candidate()"
+    },
+    {
+      "label": ".trigger_fatal_lockout()",
+      "file_type": "code",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L20",
+      "id": "core_memory_bea_behavioraleventaccumulator_trigger_fatal_lockout",
+      "community": 0,
+      "norm_label": ".trigger_fatal_lockout()"
+    },
+    {
+      "label": ".record_telemetry()",
+      "file_type": "code",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L29",
+      "id": "core_memory_bea_behavioraleventaccumulator_record_telemetry",
+      "community": 0,
+      "norm_label": ".record_telemetry()"
+    },
+    {
+      "label": ".get_state()",
+      "file_type": "code",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L82",
+      "id": "core_memory_bea_behavioraleventaccumulator_get_state",
+      "community": 0,
+      "norm_label": ".get_state()"
+    },
+    {
+      "label": "._calculate_risk()",
+      "file_type": "code",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L96",
+      "id": "core_memory_bea_behavioraleventaccumulator_calculate_risk",
+      "community": 0,
+      "norm_label": "._calculate_risk()"
+    },
+    {
+      "label": "._generate_locked_state()",
+      "file_type": "code",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L128",
+      "id": "core_memory_bea_behavioraleventaccumulator_generate_locked_state",
+      "community": 0,
+      "norm_label": "._generate_locked_state()"
+    },
+    {
+      "label": ".reset_candidate()",
+      "file_type": "code",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L138",
+      "id": "core_memory_bea_behavioraleventaccumulator_reset_candidate",
+      "community": 0,
+      "norm_label": ".reset_candidate()"
+    },
+    {
+      "label": ".cleanup_stale_sessions()",
+      "file_type": "code",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L143",
+      "id": "core_memory_bea_behavioraleventaccumulator_cleanup_stale_sessions",
+      "community": 0,
+      "norm_label": ".cleanup_stale_sessions()"
+    },
+    {
+      "label": "Logs a fatal-level violation silently (Mobile Phone / Tab Switch).         Chan",
+      "file_type": "rationale",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L21",
+      "id": "core_memory_bea_rationale_21",
+      "community": 0,
+      "norm_label": "logs a fatal-level violation silently (mobile phone / tab switch).         chan"
+    },
+    {
+      "label": "Evaluates stateless gaze against industry-standard temporal limits.",
+      "file_type": "rationale",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L30",
+      "id": "core_memory_bea_rationale_30",
+      "community": 0,
+      "norm_label": "evaluates stateless gaze against industry-standard temporal limits."
+    },
+    {
+      "label": "eslint.config.mjs",
+      "file_type": "code",
+      "source_file": "frontend\\eslint.config.mjs",
+      "source_location": "L1",
+      "id": "frontend_eslint_config_mjs",
+      "community": 13,
+      "norm_label": "eslint.config.mjs"
+    },
+    {
+      "label": "next-env.d.ts",
+      "file_type": "code",
+      "source_file": "frontend\\next-env.d.ts",
+      "source_location": "L1",
+      "id": "frontend_next_env_d_ts",
+      "community": 14,
+      "norm_label": "next-env.d.ts"
+    },
+    {
+      "label": "next.config.ts",
+      "file_type": "code",
+      "source_file": "frontend\\next.config.ts",
+      "source_location": "L1",
+      "id": "frontend_next_config_ts",
+      "community": 15,
+      "norm_label": "next.config.ts"
+    },
+    {
+      "label": "postcss.config.mjs",
+      "file_type": "code",
+      "source_file": "frontend\\postcss.config.mjs",
+      "source_location": "L1",
+      "id": "frontend_postcss_config_mjs",
+      "community": 16,
+      "norm_label": "postcss.config.mjs"
+    },
+    {
+      "label": "layout.tsx",
+      "file_type": "code",
+      "source_file": "frontend\\src\\app\\layout.tsx",
+      "source_location": "L1",
+      "id": "frontend_src_app_layout_tsx",
+      "community": 9,
+      "norm_label": "layout.tsx"
+    },
+    {
+      "label": "RootLayout()",
+      "file_type": "code",
+      "source_file": "frontend\\src\\app\\layout.tsx",
+      "source_location": "L20",
+      "id": "app_layout_rootlayout",
+      "community": 9,
+      "norm_label": "rootlayout()"
+    },
+    {
+      "label": "page.tsx",
+      "file_type": "code",
+      "source_file": "frontend\\src\\app\\page.tsx",
+      "source_location": "L1",
+      "id": "frontend_src_app_page_tsx",
+      "community": 10,
+      "norm_label": "page.tsx"
+    },
+    {
+      "label": "Home()",
+      "file_type": "code",
+      "source_file": "frontend\\src\\app\\page.tsx",
+      "source_location": "L8",
+      "id": "app_page_home",
+      "community": 10,
+      "norm_label": "home()"
+    },
+    {
+      "label": "page.tsx",
+      "file_type": "code",
+      "source_file": "frontend\\src\\app\\autopsy\\page.tsx",
+      "source_location": "L1",
+      "id": "frontend_src_app_autopsy_page_tsx",
+      "community": 11,
+      "norm_label": "page.tsx"
+    },
+    {
+      "label": "AutopsyPage()",
+      "file_type": "code",
+      "source_file": "frontend\\src\\app\\autopsy\\page.tsx",
+      "source_location": "L17",
+      "id": "autopsy_page_autopsypage",
+      "community": 11,
+      "norm_label": "autopsypage()"
+    },
+    {
+      "label": "page.tsx",
+      "file_type": "code",
+      "source_file": "frontend\\src\\app\\verdict\\page.tsx",
+      "source_location": "L1",
+      "id": "frontend_src_app_verdict_page_tsx",
+      "community": 17,
+      "norm_label": "page.tsx"
+    },
+    {
+      "label": "AuditTrail.tsx",
+      "file_type": "code",
+      "source_file": "frontend\\src\\components\\AuditTrail.tsx",
+      "source_location": "L1",
+      "id": "frontend_src_components_audittrail_tsx",
+      "community": 5,
+      "norm_label": "audittrail.tsx"
+    },
+    {
+      "label": "fetchLogs()",
+      "file_type": "code",
+      "source_file": "frontend\\src\\components\\AuditTrail.tsx",
+      "source_location": "L21",
+      "id": "components_audittrail_fetchlogs",
+      "community": 5,
+      "norm_label": "fetchlogs()"
+    },
+    {
+      "label": "getInterventionColor()",
+      "file_type": "code",
+      "source_file": "frontend\\src\\components\\AuditTrail.tsx",
+      "source_location": "L41",
+      "id": "components_audittrail_getinterventioncolor",
+      "community": 5,
+      "norm_label": "getinterventioncolor()"
+    },
+    {
+      "label": "SniperScope.tsx",
+      "file_type": "code",
+      "source_file": "frontend\\src\\components\\SniperScope.tsx",
+      "source_location": "L1",
+      "id": "frontend_src_components_sniperscope_tsx",
+      "community": 2,
+      "norm_label": "sniperscope.tsx"
+    },
+    {
+      "label": "checkHardware()",
+      "file_type": "code",
+      "source_file": "frontend\\src\\components\\SniperScope.tsx",
+      "source_location": "L60",
+      "id": "components_sniperscope_checkhardware",
+      "community": 2,
+      "norm_label": "checkhardware()"
+    },
+    {
+      "label": "initGatekeeper()",
+      "file_type": "code",
+      "source_file": "frontend\\src\\components\\SniperScope.tsx",
+      "source_location": "L79",
+      "id": "components_sniperscope_initgatekeeper",
+      "community": 2,
+      "norm_label": "initgatekeeper()"
+    },
+    {
+      "label": "startCamera()",
+      "file_type": "code",
+      "source_file": "frontend\\src\\components\\SniperScope.tsx",
+      "source_location": "L182",
+      "id": "components_sniperscope_startcamera",
+      "community": 2,
+      "norm_label": "startcamera()"
+    },
+    {
+      "label": "showToast()",
+      "file_type": "code",
+      "source_file": "frontend\\src\\components\\SniperScope.tsx",
+      "source_location": "L208",
+      "id": "components_sniperscope_showtoast",
+      "community": 2,
+      "norm_label": "showtoast()"
+    },
+    {
+      "label": "handleReset()",
+      "file_type": "code",
+      "source_file": "frontend\\src\\components\\SniperScope.tsx",
+      "source_location": "L213",
+      "id": "components_sniperscope_handlereset",
+      "community": 2,
+      "norm_label": "handlereset()"
+    },
+    {
+      "label": "stopCamera()",
+      "file_type": "code",
+      "source_file": "frontend\\src\\components\\SniperScope.tsx",
+      "source_location": "L243",
+      "id": "components_sniperscope_stopcamera",
+      "community": 2,
+      "norm_label": "stopcamera()"
+    },
+    {
+      "label": "VoiceOrb.tsx",
+      "file_type": "code",
+      "source_file": "frontend\\src\\components\\VoiceOrb.tsx",
+      "source_location": "L1",
+      "id": "frontend_src_components_voiceorb_tsx",
+      "community": 6,
+      "norm_label": "voiceorb.tsx"
+    },
+    {
+      "label": "fetchVoiceStatus()",
+      "file_type": "code",
+      "source_file": "frontend\\src\\components\\VoiceOrb.tsx",
+      "source_location": "L26",
+      "id": "components_voiceorb_fetchvoicestatus",
+      "community": 6,
+      "norm_label": "fetchvoicestatus()"
+    },
+    {
+      "label": "getOrbVisuals()",
+      "file_type": "code",
+      "source_file": "frontend\\src\\components\\VoiceOrb.tsx",
+      "source_location": "L55",
+      "id": "components_voiceorb_getorbvisuals",
+      "community": 6,
+      "norm_label": "getorbvisuals()"
+    }
+  ],
+  "links": [
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L25",
+      "weight": 1.0,
+      "source": "backend_edge_main_py",
+      "target": "backend_edge_main_init_db",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L42",
+      "weight": 1.0,
+      "source": "backend_edge_main_py",
+      "target": "backend_edge_main_log_to_db",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L56",
+      "weight": 1.0,
+      "source": "backend_edge_main_py",
+      "target": "backend_edge_main_lifespan",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L77",
+      "weight": 1.0,
+      "source": "backend_edge_main_py",
+      "target": "backend_edge_main_determine_verdict",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L113",
+      "weight": 1.0,
+      "source": "backend_edge_main_py",
+      "target": "backend_edge_main_framepayload",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L122",
+      "weight": 1.0,
+      "source": "backend_edge_main_py",
+      "target": "backend_edge_main_analyze_frame",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L194",
+      "weight": 1.0,
+      "source": "backend_edge_main_py",
+      "target": "backend_edge_main_get_audit_logs",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L210",
+      "weight": 1.0,
+      "source": "backend_edge_main_py",
+      "target": "backend_edge_main_get_autopsy_logs",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L230",
+      "weight": 1.0,
+      "source": "backend_edge_main_py",
+      "target": "backend_edge_main_get_voice_status",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L233",
+      "weight": 1.0,
+      "source": "backend_edge_main_py",
+      "target": "backend_edge_main_finalstats",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L240",
+      "weight": 1.0,
+      "source": "backend_edge_main_py",
+      "target": "backend_edge_main_generate_verdict",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L274",
+      "weight": 1.0,
+      "source": "backend_edge_main_py",
+      "target": "backend_edge_main_get_candidate_status",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L278",
+      "weight": 1.0,
+      "source": "backend_edge_main_py",
+      "target": "backend_edge_main_reset_session",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L58",
+      "weight": 1.0,
+      "source": "backend_edge_main_lifespan",
+      "target": "backend_edge_main_init_db",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L165",
+      "weight": 1.0,
+      "source": "backend_edge_main_analyze_frame",
+      "target": "backend_edge_main_determine_verdict",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "inherits",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L113",
+      "weight": 1.0,
+      "source": "backend_edge_main_framepayload",
+      "target": "basemodel",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "inherits",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\edge_main.py",
+      "source_location": "L233",
+      "weight": 1.0,
+      "source": "backend_edge_main_finalstats",
+      "target": "basemodel",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\voice_engine.py",
+      "source_location": "L23",
+      "weight": 1.0,
+      "source": "backend_voice_engine_py",
+      "target": "backend_voice_engine_speak",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\voice_engine.py",
+      "source_location": "L39",
+      "weight": 1.0,
+      "source": "backend_voice_engine_py",
+      "target": "backend_voice_engine_voice_loop",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\voice_engine.py",
+      "source_location": "L82",
+      "weight": 1.0,
+      "source": "backend_voice_engine_py",
+      "target": "backend_voice_engine_start_voice_loop",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L5",
+      "weight": 1.0,
+      "source": "backend_core_memory_bea_py",
+      "target": "core_memory_bea_behavioraleventaccumulator",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L6",
+      "weight": 1.0,
+      "source": "core_memory_bea_behavioraleventaccumulator",
+      "target": "core_memory_bea_behavioraleventaccumulator_init",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L11",
+      "weight": 1.0,
+      "source": "core_memory_bea_behavioraleventaccumulator",
+      "target": "core_memory_bea_behavioraleventaccumulator_ensure_candidate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L20",
+      "weight": 1.0,
+      "source": "core_memory_bea_behavioraleventaccumulator",
+      "target": "core_memory_bea_behavioraleventaccumulator_trigger_fatal_lockout",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L29",
+      "weight": 1.0,
+      "source": "core_memory_bea_behavioraleventaccumulator",
+      "target": "core_memory_bea_behavioraleventaccumulator_record_telemetry",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L82",
+      "weight": 1.0,
+      "source": "core_memory_bea_behavioraleventaccumulator",
+      "target": "core_memory_bea_behavioraleventaccumulator_get_state",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L96",
+      "weight": 1.0,
+      "source": "core_memory_bea_behavioraleventaccumulator",
+      "target": "core_memory_bea_behavioraleventaccumulator_calculate_risk",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L128",
+      "weight": 1.0,
+      "source": "core_memory_bea_behavioraleventaccumulator",
+      "target": "core_memory_bea_behavioraleventaccumulator_generate_locked_state",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L138",
+      "weight": 1.0,
+      "source": "core_memory_bea_behavioraleventaccumulator",
+      "target": "core_memory_bea_behavioraleventaccumulator_reset_candidate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L143",
+      "weight": 1.0,
+      "source": "core_memory_bea_behavioraleventaccumulator",
+      "target": "core_memory_bea_behavioraleventaccumulator_cleanup_stale_sessions",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L24",
+      "weight": 1.0,
+      "source": "core_memory_bea_behavioraleventaccumulator_trigger_fatal_lockout",
+      "target": "core_memory_bea_behavioraleventaccumulator_ensure_candidate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L32",
+      "weight": 1.0,
+      "source": "core_memory_bea_behavioraleventaccumulator_record_telemetry",
+      "target": "core_memory_bea_behavioraleventaccumulator_ensure_candidate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L84",
+      "weight": 1.0,
+      "source": "core_memory_bea_behavioraleventaccumulator_get_state",
+      "target": "core_memory_bea_behavioraleventaccumulator_ensure_candidate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L26",
+      "weight": 1.0,
+      "source": "core_memory_bea_behavioraleventaccumulator_trigger_fatal_lockout",
+      "target": "core_memory_bea_behavioraleventaccumulator_generate_locked_state",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L21",
+      "weight": 1.0,
+      "source": "core_memory_bea_rationale_21",
+      "target": "core_memory_bea_behavioraleventaccumulator_trigger_fatal_lockout",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L36",
+      "weight": 1.0,
+      "source": "core_memory_bea_behavioraleventaccumulator_record_telemetry",
+      "target": "core_memory_bea_behavioraleventaccumulator_generate_locked_state",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L80",
+      "weight": 1.0,
+      "source": "core_memory_bea_behavioraleventaccumulator_record_telemetry",
+      "target": "core_memory_bea_behavioraleventaccumulator_calculate_risk",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L30",
+      "weight": 1.0,
+      "source": "core_memory_bea_rationale_30",
+      "target": "core_memory_bea_behavioraleventaccumulator_record_telemetry",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L88",
+      "weight": 1.0,
+      "source": "core_memory_bea_behavioraleventaccumulator_get_state",
+      "target": "core_memory_bea_behavioraleventaccumulator_generate_locked_state",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "backend\\core_memory\\bea.py",
+      "source_location": "L94",
+      "weight": 1.0,
+      "source": "core_memory_bea_behavioraleventaccumulator_get_state",
+      "target": "core_memory_bea_behavioraleventaccumulator_calculate_risk",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "frontend\\src\\app\\layout.tsx",
+      "source_location": "L20",
+      "weight": 1.0,
+      "source": "frontend_src_app_layout_tsx",
+      "target": "app_layout_rootlayout",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "frontend\\src\\app\\page.tsx",
+      "source_location": "L8",
+      "weight": 1.0,
+      "source": "frontend_src_app_page_tsx",
+      "target": "app_page_home",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "frontend\\src\\app\\autopsy\\page.tsx",
+      "source_location": "L17",
+      "weight": 1.0,
+      "source": "frontend_src_app_autopsy_page_tsx",
+      "target": "autopsy_page_autopsypage",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "frontend\\src\\components\\AuditTrail.tsx",
+      "source_location": "L21",
+      "weight": 1.0,
+      "source": "frontend_src_components_audittrail_tsx",
+      "target": "components_audittrail_fetchlogs",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "frontend\\src\\components\\AuditTrail.tsx",
+      "source_location": "L41",
+      "weight": 1.0,
+      "source": "frontend_src_components_audittrail_tsx",
+      "target": "components_audittrail_getinterventioncolor",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "frontend\\src\\components\\SniperScope.tsx",
+      "source_location": "L60",
+      "weight": 1.0,
+      "source": "frontend_src_components_sniperscope_tsx",
+      "target": "components_sniperscope_checkhardware",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "frontend\\src\\components\\SniperScope.tsx",
+      "source_location": "L79",
+      "weight": 1.0,
+      "source": "frontend_src_components_sniperscope_tsx",
+      "target": "components_sniperscope_initgatekeeper",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "frontend\\src\\components\\SniperScope.tsx",
+      "source_location": "L182",
+      "weight": 1.0,
+      "source": "frontend_src_components_sniperscope_tsx",
+      "target": "components_sniperscope_startcamera",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "frontend\\src\\components\\SniperScope.tsx",
+      "source_location": "L208",
+      "weight": 1.0,
+      "source": "frontend_src_components_sniperscope_tsx",
+      "target": "components_sniperscope_showtoast",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "frontend\\src\\components\\SniperScope.tsx",
+      "source_location": "L213",
+      "weight": 1.0,
+      "source": "frontend_src_components_sniperscope_tsx",
+      "target": "components_sniperscope_handlereset",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "frontend\\src\\components\\SniperScope.tsx",
+      "source_location": "L243",
+      "weight": 1.0,
+      "source": "frontend_src_components_sniperscope_tsx",
+      "target": "components_sniperscope_stopcamera",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "frontend\\src\\components\\SniperScope.tsx",
+      "source_location": "L184",
+      "weight": 1.0,
+      "source": "components_sniperscope_startcamera",
+      "target": "components_sniperscope_checkhardware",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "frontend\\src\\components\\SniperScope.tsx",
+      "source_location": "L197",
+      "weight": 1.0,
+      "source": "components_sniperscope_startcamera",
+      "target": "components_sniperscope_initgatekeeper",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "frontend\\src\\components\\SniperScope.tsx",
+      "source_location": "L215",
+      "weight": 1.0,
+      "source": "components_sniperscope_handlereset",
+      "target": "components_sniperscope_showtoast",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "frontend\\src\\components\\VoiceOrb.tsx",
+      "source_location": "L26",
+      "weight": 1.0,
+      "source": "frontend_src_components_voiceorb_tsx",
+      "target": "components_voiceorb_fetchvoicestatus",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "frontend\\src\\components\\VoiceOrb.tsx",
+      "source_location": "L55",
+      "weight": 1.0,
+      "source": "frontend_src_components_voiceorb_tsx",
+      "target": "components_voiceorb_getorbvisuals",
+      "confidence_score": 1.0
+    }
+  ],
+  "hyperedges": []
+}

@@ -1,0 +1,122 @@
+{
+  "D:\\My Projects\\guard-edge-ai-proctoring\\tailwind.config.ts": {
+    "mtime": 1777049571.3409839,
+    "hash": "3cc2823b066a60032163f5ef2a97444b"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\backend\\edge_main.py": {
+    "mtime": 1777790769.08454,
+    "hash": "a77ebc2fc9c5f22a12133cfa5c01f481"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\backend\\voice_engine.py": {
+    "mtime": 1777049571.2510934,
+    "hash": "06279bbde178eb52dd16ffd53bcfe933"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\backend\\core_memory\\bea.py": {
+    "mtime": 1777791365.7463014,
+    "hash": "b7724cbd8aad90d8c14415982f63a1dc"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\eslint.config.mjs": {
+    "mtime": 1777049571.3346171,
+    "hash": "6c4307ffa009658f5c97f5629094c0c2"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\next-env.d.ts": {
+    "mtime": 1777054932.0095844,
+    "hash": "29f60a376e12bf72b67d4994fcc84214"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\next.config.ts": {
+    "mtime": 1777049571.3346171,
+    "hash": "025f4fcb6024b3524d19492cf7ce54a2"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\postcss.config.mjs": {
+    "mtime": 1777049571.3366194,
+    "hash": "481fac0fdecd70e1821cc30b86030c1a"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\src\\app\\layout.tsx": {
+    "mtime": 1777049571.3386173,
+    "hash": "e7595f79a62a5fbce0df374a5657c756"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\src\\app\\page.tsx": {
+    "mtime": 1777791397.3808239,
+    "hash": "8f02bcef9afdf2c2ff8dad8d1f2ea53a"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\src\\app\\autopsy\\page.tsx": {
+    "mtime": 1777049571.3376174,
+    "hash": "daed34df3f4365e8c98fab9b1625e678"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\src\\app\\verdict\\page.tsx": {
+    "mtime": 1777790031.2102988,
+    "hash": "aabbc7a89cc81824dfd3d08bc47e22b3"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\src\\components\\AuditTrail.tsx": {
+    "mtime": 1777049571.3399777,
+    "hash": "938fdc76197618a6009a4badd0a8856a"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\src\\components\\SniperScope.tsx": {
+    "mtime": 1777791397.3808239,
+    "hash": "f3d020759538465632006a10bfcb57c0"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\src\\components\\VoiceOrb.tsx": {
+    "mtime": 1777791779.365861,
+    "hash": "534ad1981837af55ea7e432e7ef89d28"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\ai-context.yaml": {
+    "mtime": 1777298800.1207416,
+    "hash": "ce48660229041ae052e88e663194e322"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\docker-compose.yml": {
+    "mtime": 1777298866.338219,
+    "hash": "f9bedfe652d2747c8a9028c855cf9308"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\README.md": {
+    "mtime": 1777049571.2500947,
+    "hash": "cb8df7b99ae26b8d25826f2f65a203b8"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\requirements.txt": {
+    "mtime": 1777298732.6865957,
+    "hash": "19b876446faa7ed2f42d6ec5e4f909d5"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\system-context.yaml": {
+    "mtime": 1777298750.240789,
+    "hash": "68fc954580c80b48d833df6bc68f8748"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\temp.txt": {
+    "mtime": 1777298645.5263753,
+    "hash": "7e2767c033099ab95ac919e044649b71"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\AGENTS.md": {
+    "mtime": 1777049571.3336167,
+    "hash": "9346a4897ff955555ddedb7bebf77adb"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\CLAUDE.md": {
+    "mtime": 1777049571.3336167,
+    "hash": "771faa62feb60b7de901a397aebb29b0"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\pnpm-workspace.yaml": {
+    "mtime": 1777049571.335617,
+    "hash": "b6e0a9c1a7b488c11a1c5812b4ed319b"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\README.md": {
+    "mtime": 1777049571.3346171,
+    "hash": "9162add00befbcdb432430f405c4ad8d"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\public\\file.svg": {
+    "mtime": 1777049571.3366194,
+    "hash": "d09f95206c3fa0bb9bd9fefabfd0ea71"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\public\\globe.svg": {
+    "mtime": 1777049571.3366194,
+    "hash": "2aaafa6a49b6563925fe440891e32717"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\public\\next.svg": {
+    "mtime": 1777049571.3366194,
+    "hash": "8e061864f388b47f33a1c3780831193e"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\public\\vercel.svg": {
+    "mtime": 1777049571.3366194,
+    "hash": "c0af2f507b369b085b35ef4bbe3bcf1e"
+  },
+  "D:\\My Projects\\guard-edge-ai-proctoring\\frontend\\public\\window.svg": {
+    "mtime": 1777049571.3376174,
+    "hash": "a2760511c65806022ad20adf74370ff3"
+  }
+}

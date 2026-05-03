@@ -12,16 +12,18 @@ interface VoiceOrbProps {
 export default function VoiceOrb({ onTranscriptUpdate }: VoiceOrbProps) {
   const [voiceState, setVoiceState] = useState<VoiceState>("IDLE");
   const [devMode, setDevMode] = useState(false);
-  const [isActive, setIsActive] = useState(true);
+  const [isEngaged, setIsEngaged] = useState(false); // Default to false to prevent rogue polling on load
 
   // Simulate VAD-driven framer motion scale
   const orbScale = useSpring(1, { stiffness: 280, damping: 22 });
 
   useEffect(() => {
+    // GATE THE POLLING: If not engaged, do not set up the interval at all.
+    if (!isEngaged) return;
+
     let lastTranscript = "";
 
     const fetchVoiceStatus = async () => {
-      if (!isActive) return;
       try {
         const response = await fetch("http://localhost:8080/api/v1/voice-status");
         if (response.ok) {
@@ -47,7 +49,7 @@ export default function VoiceOrb({ onTranscriptUpdate }: VoiceOrbProps) {
 
     const interval = setInterval(fetchVoiceStatus, 500);
     return () => clearInterval(interval);
-  }, [isActive, onTranscriptUpdate, orbScale]);
+  }, [isEngaged, onTranscriptUpdate, orbScale]);
 
   // ─── Orb Visual Mappings ─────────────────────────────────────────────────
   const getOrbVisuals = () => {
@@ -90,7 +92,7 @@ export default function VoiceOrb({ onTranscriptUpdate }: VoiceOrbProps) {
       />
 
       <h3 className="text-[10px] tracking-widest text-gray-500 absolute top-4 left-4 flex items-center gap-2">
-        <span className={`w-1 h-1 rounded-full transition-colors duration-300 ${isActive ? "bg-sentry-neon animate-pulse" : "bg-gray-500"}`} />
+        <span className={`w-1 h-1 rounded-full transition-colors duration-300 ${isEngaged ? "bg-sentry-neon animate-pulse" : "bg-gray-500"}`} />
         AUDIO INTERROGATOR
       </h3>
 
@@ -132,14 +134,14 @@ export default function VoiceOrb({ onTranscriptUpdate }: VoiceOrbProps) {
       </p>
 
       <button
-        onClick={() => setIsActive(!isActive)}
+        onClick={() => setIsEngaged(!isEngaged)}
         className={`mt-5 px-6 py-2 text-[10px] tracking-widest font-bold border rounded transition-all cursor-pointer ${
-          isActive
+          isEngaged
             ? "border-red-500/50 text-red-400 hover:bg-red-500/10 hover:border-red-400"
             : "border-sentry-neon/50 text-sentry-neon hover:bg-sentry-neon/10 hover:border-sentry-neon"
         }`}
       >
-        {isActive ? "DEACTIVATE SYNC" : "ACTIVATE SYNC"}
+        {isEngaged ? "DEACTIVATE SYNC" : "ACTIVATE SYNC"}
       </button>
 
       {devMode && (

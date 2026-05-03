@@ -8,6 +8,11 @@ import sqlite3
 import cv2
 import numpy as np
 import os
+import requests
+from openai import AsyncOpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
 from ultralytics import YOLO
 from datetime import datetime
 from contextlib import asynccontextmanager
@@ -169,7 +174,7 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
     )
 
     if is_critical:
-        risk_packet = await bea_engine.trigger_fatal_lockout(payload.candidate_id)
+        risk_packet = await bea_engine.trigger_fatal_lockout(payload.candidate_id, reason=verdict)
     else:
         risk_packet = await bea_engine.record_telemetry(payload.candidate_id, gaze)
 
@@ -229,14 +234,63 @@ async def get_autopsy_logs():
 async def get_voice_status():
     return voice_engine.voice_state
 
+class FinalStats(BaseModel):
+    candidate_id: str
+    total_violations: int
+    risk_score: int
+    session_duration_sec: int = 300
+    critical_flags: list[str] = []
+
+@app.post("/generate-verdict")
+async def generate_verdict(stats: FinalStats):
+    critical_context = ""
+    if stats.critical_flags:
+        flags_text = ", ".join(stats.critical_flags)
+        critical_context = f"\nCRITICAL VIOLATIONS DETECTED: {flags_text}\nThe candidate triggered a fatal violation for: {flags_text}. Address this severe breach of exam integrity directly in paragraph 2.\n"
+
+    prompt = f"""You are an empathetic executive interview coach. Analyze the following candidate data: 
+Total Violations flagged: {stats.total_violations}
+Peak Risk Score: {stats.risk_score}%
+Session Duration (sec): {stats.session_duration_sec}{critical_context}
+
+Write a 3-paragraph coaching report. 
+Paragraph 1: Praise their effort. 
+Paragraph 2: Point out their specific posture/attention flaws based on the data. 
+Paragraph 3: Give actionable advice for their next interview."""
+
+    try:
+        client = AsyncOpenAI(
+            base_url="https://integrate.api.nvidia.com/v1",
+            api_key=os.environ.get("NVIDIA_API_KEY")
+        )
+
+        completion = await client.chat.completions.create(
+            model="meta/llama-3.1-8b-instruct",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=500
+        )
+        
+        ai_report = completion.choices[0].message.content
+    except Exception as e:
+        logger.error(f"NVIDIA API error: {e}")
+        ai_report = f"Mock Report (API unreachable):\n\nParagraph 1: You showed great effort today!\n\nParagraph 2: You had {stats.total_violations} visibility violations with a peak risk of {stats.risk_score}%.\n\nParagraph 3: Please ensure your posture and environment are optimized next time."
+
+    return {
+        "candidate_id": stats.candidate_id,
+        "total_violations": stats.total_violations,
+        "risk_score": stats.risk_score,
+        "report": ai_report
+    }
+
 @app.get("/api/v1/status/{candidate_id}")
 async def get_candidate_status(candidate_id: str):
     return await bea_engine.get_state(candidate_id)
 
-@app.post("/api/v1/reset/{candidate_id}")
-async def reset_candidate_status(candidate_id: str):
+@app.post("/reset-session")
+async def reset_session(candidate_id: str = "major_project_candidate_01"):
     await bea_engine.reset_candidate(candidate_id)
-    return {"status": "success"}
+    return {"status": "success", "message": "Memory cleared."}
 
 if __name__ == "__main__":
     import uvicorn
