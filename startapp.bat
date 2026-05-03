@@ -5,7 +5,7 @@ echo     Starting G.U.A.R.D. Edge-AI Proctoring
 echo ===================================================
 
 echo [1/2] Booting FastAPI Backend (Port 8080)...
-start "GUARD Backend" cmd /k "call backend\.venv\Scripts\activate && python backend\edge_main.py"
+start "GUARD Backend" cmd /k "call backend\.venv\Scripts\activate && set DISABLE_VOICE_ENGINE=true && python backend\edge_main.py"
 
 echo [2/2] Booting Next.js Frontend (Port 3000)...
 start "GUARD Frontend" cmd /k "cd frontend && pnpm dev"

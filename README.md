@@ -27,11 +27,43 @@
 
 ## ⚡ What is G.U.A.R.D.?
 
-**G.U.A.R.D.** is a **real-time, edge-native AI proctoring system** built on a dual-model vision pipeline — **MediaPipe Face Mesh** running at 30 fps on CPU as a gatekeeper, with **YOLOv8s** running GPU-accelerated object detection on a 5-second cadence. It analyzes head pose, gaze direction, mouth activity, face count, and prohibited objects (phones, books, laptops) through a deterministic verdict engine — then feeds everything into a temporal **Behavioral Event Accumulator** that separates innocent micro-glances from genuine cheating patterns.
+**G.U.A.R.D.** is a **real-time, sovereign AI proctoring system** designed to run **entirely on your own hardware**. Unlike cloud-based proctoring tools that stream your webcam to remote servers, the entire perception stack — the dual vision pipeline, the temporal memory engine, the audit database — runs **locally**. No frames leave the device. No subscriptions. No surveillance capitalism.
 
-No VLM hallucinations. No cloud dependency. No black box.
+The vision layer combines **MediaPipe Face Mesh** (30 fps CPU gatekeeper) with **YOLOv8s** (GPU-accelerated object detection on a 5-second cadence). Head pose, gaze, mouth activity, face count, and prohibited objects (phones, books, laptops) flow through a **deterministic verdict engine**, then into a temporal **Behavioral Event Accumulator** that separates innocent micro-glances from genuine cheating patterns.
 
-> **The philosophy:** A proctoring system should be an *impartial sensor*, not a probability guess. G.U.A.R.D. replaces prompt-based VLM inference with a **deterministic, explainable verdict engine** — every decision is traceable back to exact sensor readings: `Objects: None | Faces: 1 | Pose: left | Talking: false`.
+The post-session AI coach is **model-agnostic and pluggable** — point it at any local Ollama model (Llama 3.1 8B, Mistral, Qwen, your own fine-tune) and you have a fully air-gapped system. A cloud-API fallback (NVIDIA NIM) is provided for low-VRAM laptops during development.
+
+> **The philosophy:** A proctoring system should be an *impartial sensor*, not a black box. G.U.A.R.D. replaces prompt-based VLM perception with a **deterministic, explainable verdict engine** — every decision traces back to exact sensor readings: `Objects: None | Faces: 1 | Pose: left | Talking: false`. And the LLM that writes the post-session report is **yours to choose, yours to host, yours to inspect**.
+
+---
+
+## 🔒 Privacy Architecture — What Runs Where
+
+G.U.A.R.D. is built around a clear privacy boundary. The **real-time proctoring loop is 100% local**. The **post-session coaching report** is a configurable module — local by default, with a cloud fallback for development on low-VRAM machines.
+
+| Component | Mode | Network? | Notes |
+|-----------|------|----------|-------|
+| YOLOv8s object detector | **Local** (PyTorch / CUDA) | ❌ Never | Runs on your GPU/CPU |
+| MediaPipe Face Mesh | **Local** (Browser / WASM) | ❌ Never | 30 fps in-browser |
+| Deterministic Verdict Engine | **Local** (Python) | ❌ Never | Pure rule-based logic |
+| BEA Temporal Memory | **Local** (Python in-memory) | ❌ Never | 5-min sliding window |
+| Audit Database | **Local** (SQLite) | ❌ Never | `sentry_logs.db` on disk |
+| Evidence Frames | **Local** (SQLite blob) | ❌ Never | Captured at risk ≥ 75% |
+| **Post-Session AI Coach** | 🔀 **Switchable** | Depends on mode | See below |
+| Voice STT (current) | ⚠️ Cloud (Google) | ✅ Yes | Uses browser `SpeechRecognition` — Chrome routes to Google. Roadmap: swap to local Whisper/Vosk |
+
+### AI Coach — Two Modes
+
+The `/generate-verdict` endpoint can be backed by either a local Ollama instance or a hosted API:
+
+| Mode | When to Use | Privacy | VRAM | Setup |
+|------|-------------|---------|------|-------|
+| 🟢 **Sovereign Mode** *(recommended)* | Production, sensitive exams, full air-gap | ✅ Fully local | ~6 GB (8B) / ~10 GB (13B) | Run Ollama, set `LLM_MODE=ollama` |
+| 🟡 **Demo Mode** | Low-VRAM dev laptops (≤4 GB), quick prototyping | ⚠️ Cloud round-trip | 0 GB | Set `LLM_MODE=nvidia`, provide `NVIDIA_API_KEY` |
+
+**Bring Your Own Model.** Sovereign Mode runs against any [Ollama-compatible model](https://ollama.com/library) — `llama3.1:8b`, `mistral:7b`, `qwen2.5:14b`, or a custom fine-tune. Configure via `OLLAMA_MODEL` env var.
+
+> **Current dev setup:** This repo is being developed on a 4 GB VRAM laptop, so Demo Mode is the active default. The system is migrating to a 12 GB VRAM target where Sovereign Mode becomes the default — at which point **zero data leaves the device**.
 
 ---
 
@@ -95,11 +127,18 @@ No VLM hallucinations. No cloud dependency. No black box.
 │  └────────────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────────────┘
                   │
-                  ▼  (Post-Session Only)
+                  ▼  (Post-Session Only — Pluggable LLM Backend)
 ┌──────────────────────────────────────────────────────────────────────────┐
-│         NVIDIA API  (meta/llama-3.1-8b-instruct)                         │
-│         Generates personalized AI coaching report on session end          │
-│         → Routed to /verdict page with Framer Motion reveal              │
+│            🔀  AI COACH ROUTER  (LLM_MODE env switch)                     │
+│                                                                          │
+│   ┌────────────────────────────┐    ┌───────────────────────────────┐   │
+│   │  🟢 SOVEREIGN MODE          │    │  🟡 DEMO MODE                  │   │
+│   │  Ollama (localhost:11434)   │ OR │  NVIDIA NIM API                │   │
+│   │  llama3.1 / mistral / qwen  │    │  meta/llama-3.1-8b-instruct    │   │
+│   │  → 100% offline, BYOM       │    │  → For ≤4 GB VRAM laptops      │   │
+│   └────────────────────────────┘    └───────────────────────────────┘   │
+│                                                                          │
+│   Generates 3-paragraph coaching report → /verdict page                  │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -205,12 +244,18 @@ The orb has 4 reactive visual states:
 
 ### Post-Session AI Coach — `/verdict`
 
+The coaching report is generated by a **pluggable LLM backend**. Sovereign Mode runs against your local Ollama; Demo Mode hits NVIDIA's hosted API for low-VRAM dev machines.
+
 When the proctor clicks **"End Session & Generate Report"**, G.U.A.R.D.:
 
 1. Computes actual session duration from `Date.now() - sessionStartTime`
 2. Packages `{ total_violations, risk_score, session_duration_sec, critical_flags }` → `POST /generate-verdict`
-3. Backend calls **NVIDIA API** (`meta/llama-3.1-8b-instruct`) with a 3-paragraph coaching prompt
+3. Backend reads `LLM_MODE` and routes to the configured engine:
+   - 🟢 **`ollama`** → POSTs to `http://localhost:11434/api/chat` with `OLLAMA_MODEL` (default: `llama3.1:8b`)
+   - 🟡 **`nvidia`** → calls `integrate.api.nvidia.com/v1` with `meta/llama-3.1-8b-instruct`
 4. Result is stored in `localStorage` and rendered on `/verdict` with staggered Framer Motion blur-reveals
+
+> **Bring Your Own Model.** Any Ollama-compatible model works: `mistral:7b`, `qwen2.5:14b`, `gemma2:9b`, or a custom fine-tune. Just `ollama pull <model>` and set `OLLAMA_MODEL`.
 
 ---
 
@@ -218,14 +263,22 @@ When the proctor clicks **"End Session & Generate Report"**, G.U.A.R.D.:
 
 ### Prerequisites
 
-| Requirement | Version | Install |
-|---|---|---|
-| Python | 3.11+ | [python.org](https://python.org) |
-| Node.js | 18+ | [nodejs.org](https://nodejs.org) |
-| pnpm | 10+ | `npm i -g pnpm` |
-| CUDA *(optional)* | 11.8+ | [nvidia.com/cuda](https://developer.nvidia.com/cuda-downloads) |
+| Requirement | Version | Install | Notes |
+|---|---|---|---|
+| Python | 3.11+ | [python.org](https://python.org) | |
+| Node.js | 18+ | [nodejs.org](https://nodejs.org) | |
+| pnpm | 10+ | `npm i -g pnpm` | |
+| CUDA *(optional)* | 11.8+ | [nvidia.com/cuda](https://developer.nvidia.com/cuda-downloads) | YOLO falls back to CPU if absent |
+| Ollama *(Sovereign Mode)* | latest | [ollama.com](https://ollama.com) | Required for fully-offline AI coach |
+| `llama3.1:8b` *(Sovereign Mode)* | — | `ollama pull llama3.1:8b` | Or any model of your choice |
 
 > **GPU Note:** YOLOv8s auto-detects CUDA. If no GPU is available, it falls back to CPU inference seamlessly.
+>
+> **VRAM Guide for Sovereign Mode:**
+> - 4 GB VRAM → use **Demo Mode** (NVIDIA API). Local 8B models won't fit alongside YOLO.
+> - 8 GB VRAM → `llama3.1:8b` quantized (Q4_K_M).
+> - 12 GB VRAM → `llama3.1:8b` full or `qwen2.5:14b` quantized — recommended sweet spot.
+> - 16 GB+ VRAM → any model up to 13B comfortably.
 
 ---
 
@@ -263,19 +316,46 @@ pnpm install
 
 ### 4. Environment Variables
 
-Create a `.env` file in the `backend/` directory:
+Create a `.env` file in the `backend/` directory and pick **one** of the two modes:
+
+**🟢 Sovereign Mode — Fully Local (Recommended)**
 
 ```env
-NVIDIA_API_KEY=nvapi-xxxxx   # Required for post-session AI coaching report
+LLM_MODE=ollama
+OLLAMA_HOST=http://localhost:11434
+OLLAMA_MODEL=llama3.1:8b      # Or: mistral:7b, qwen2.5:14b, gemma2:9b, your-custom-model
 ```
 
-> The NVIDIA API is only used for the optional post-session coaching report (`/generate-verdict`). All real-time proctoring runs fully offline.
+**🟡 Demo Mode — Cloud Fallback (Low-VRAM Dev)**
+
+```env
+LLM_MODE=nvidia
+NVIDIA_API_KEY=nvapi-xxxxx    # Get from https://build.nvidia.com
+```
+
+> ⚠️ **Privacy Note:** Demo Mode sends only the post-session **statistics** (violation count, risk score, duration) to NVIDIA's API — never frames, faces, or audio. Real-time proctoring is fully local in either mode.
 
 ---
 
 ### 🟢 Boot Sequence
 
-**Option A — Manual (2 terminals):**
+**Option A — Sovereign Mode (3 terminals):**
+
+```bash
+# Terminal 1 — Local LLM
+ollama serve
+ollama pull llama3.1:8b   # one-time
+
+# Terminal 2 — Backend
+cd backend
+python -m uvicorn edge_main:app --host 0.0.0.0 --port 8080 --reload
+
+# Terminal 3 — Frontend
+cd frontend
+pnpm dev
+```
+
+**Option B — Demo Mode (2 terminals):**
 
 ```bash
 # Terminal 1 — Backend
@@ -287,13 +367,13 @@ cd frontend
 pnpm dev
 ```
 
-**Option B — One-click (Windows):**
+**Option C — One-click (Windows):**
 
 ```bash
 startapp.bat
 ```
 
-**Option C — Docker Compose:**
+**Option D — Docker Compose:**
 
 ```bash
 docker-compose up
@@ -309,7 +389,7 @@ Open **[http://localhost:3000](http://localhost:3000)** — the dashboard is liv
 |-------|------|-------------|
 | `/` | **Main Dashboard** | Live camera feed, SniperScope HUD, VoiceOrb, BEA telemetry, risk score, inference log |
 | `/autopsy` | **S.P.A.R.T.A. Terminal Autopsy** | Post-session evidence gallery — captured frames with AI logic traces, risk scores, timestamps |
-| `/verdict` | **AI Coaching Report** | Personalized 3-paragraph coaching report generated by Llama 3.1 via NVIDIA API |
+| `/verdict` | **AI Coaching Report** | Personalized 3-paragraph coaching report from your configured LLM (local Ollama or NVIDIA API) |
 
 ---
 
@@ -469,7 +549,7 @@ Key constants you can tune:
 | **Face Analysis** | MediaPipe Face Mesh (468 landmarks) | 30 fps CPU-only, no backend round-trip |
 | **Backend** | FastAPI + Uvicorn | Async, auto-docs, background tasks |
 | **Memory** | BEA (Pure Python) + SQLite | Zero-dependency temporal risk graph |
-| **AI Coach** | NVIDIA API (Llama 3.1 8B Instruct) | Post-session coaching reports |
+| **AI Coach** | Ollama (any model) ⇄ NVIDIA API fallback | Pluggable, local-first, BYOM |
 | **Frontend** | Next.js 16 (Turbopack) | React 19, App Router, fast HMR |
 | **Styling** | Tailwind CSS v4 | CSS-native `@theme` variables |
 | **Animation** | Framer Motion 12 | Spring physics, staggered reveals |

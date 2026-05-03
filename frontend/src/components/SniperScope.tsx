@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useImperativeHandle, type Ref } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 export interface RiskPacket {
@@ -11,11 +11,17 @@ export interface RiskPacket {
   intervention_level: "CLEAR" | "SOFT_WARNING" | "HARD_WARNING" | "WARNING_LOGGED" | "SEVERE_VIOLATION_LOGGED";
 }
 
-interface SniperScopeProps {
-  onTelemetryUpdate: (packet: RiskPacket, verdict: string) => void;
+// Imperative surface exposed to parent for session-level control (auto-disengage on end).
+export interface SniperScopeHandle {
+  stopCamera: () => void;
 }
 
-export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
+interface SniperScopeProps {
+  onTelemetryUpdate: (packet: RiskPacket, verdict: string) => void;
+  ref?: Ref<SniperScopeHandle>;
+}
+
+export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const loopTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -42,11 +48,23 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
   });
   const gatekeeperRef = useRef<{ camera: any; faceMesh: any } | null>(null);
 
+  // Stable reference to parent callback — prevents the inference loop from being
+  // re-created on every parent render, which previously spawned parallel loop chains
+  // and produced ~10x the intended request rate (DB rows showed 500 ms cadence vs 5 s spec).
+  const onTelemetryUpdateRef = useRef(onTelemetryUpdate);
   useEffect(() => {
-    // Dynamically inject MediaPipe Face Mesh on mount to avoid Turbopack strictness
+    onTelemetryUpdateRef.current = onTelemetryUpdate;
+  }, [onTelemetryUpdate]);
+
+  // Single-flight guard so duplicate scheduling sources can't start a second chain.
+  const loopRunningRef = useRef(false);
+
+  useEffect(() => {
+    // Inject MediaPipe Face Mesh from /public/mediapipe (locally bundled, no CDN dependency).
+    // Assets are copied from node_modules by scripts/copy-mediapipe.mjs at predev/prebuild.
     if (typeof window !== "undefined" && !(window as any).FaceMesh) {
       const script = document.createElement("script");
-      script.src = "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js";
+      script.src = "/mediapipe/face_mesh.js";
       script.async = true;
       script.onload = () => {
         setIsFaceMeshReady(true);
@@ -58,21 +76,24 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
   }, []);
 
   // --- 1. HARDWARE TRIPWIRE: Virtual Camera Detection ---
-  const checkHardware = async () => {
+  // Returns true if a virtual camera was detected (caller should abort startup).
+  const checkHardware = async (): Promise<{ compromised: boolean; label?: string }> => {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoDevices = devices.filter(d => d.kind === 'videoinput');
-      
+
+      const blocklist = ['obs', 'virtual', 'snap', 'manycam', 'xsplit', 'droidcam', 'iriun', 'epoccam'];
       for (const device of videoDevices) {
         const label = device.label.toLowerCase();
-        if (label.includes('obs') || label.includes('virtual') || label.includes('snap')) {
+        if (blocklist.some(token => label.includes(token))) {
           console.error("🚨 HARDWARE TRIPWIRE: Virtual Camera Detected:", device.label);
-          // In production, this would trigger an instant FATAL lock.
-          // setSysStatus("LOCKED"); 
+          return { compromised: true, label: device.label };
         }
       }
+      return { compromised: false };
     } catch (err) {
       console.error("Hardware scan failed", err);
+      return { compromised: false };
     }
   };
 
@@ -91,7 +112,7 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
     }
 
     const faceMesh = new FaceMesh({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
+      locateFile: (file: string) => `/mediapipe/${file}`,
     });
 
     faceMesh.setOptions({
@@ -101,7 +122,7 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
       minTrackingConfidence: 0.5,
     });
 
-    faceMesh.onResults((results) => {
+    faceMesh.onResults((results: any) => {
       let faces = 0;
       let talking = false;
       let pose = "center";
@@ -182,9 +203,25 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
   // --- 3. OPTICS INITIALIZATION ---
   const startCamera = async () => {
     try {
-      await checkHardware();
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { width: 1280, height: 720, facingMode: "user" } 
+      // Hardware tripwire: abort if virtual camera is found before any feed opens
+      const hw = await checkHardware();
+      if (hw.compromised) {
+        setSysStatus("COMPROMISED");
+        setLatestVerdict(`🚨 HARDWARE TRIPWIRE: Virtual camera detected (${hw.label}). Session blocked.`);
+        showToast(`BLOCKED: ${hw.label?.toUpperCase()} DETECTED`, "error");
+        // Notify parent — this is a session-fatal event
+        onTelemetryUpdateRef.current({
+          candidate_id: CANDIDATE_ID,
+          risk_score: 100,
+          violation_count: 0,
+          critical_flags: [`Virtual camera: ${hw.label}`],
+          intervention_level: "SEVERE_VIOLATION_LOGGED"
+        }, "Session blocked: virtual camera detected.");
+        return;
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 1280, height: 720, facingMode: "user" }
       });
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -197,8 +234,8 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
          // Start the 30fps Gatekeeper
          gatekeeperRef.current = initGatekeeper(videoRef.current) as any;
       }
-
-      runInferenceLoop();
+      // The post-mount useEffect picks up isScanning=true and starts the inference
+      // loop. Calling it here too would double-start parallel chains.
     } catch (err) {
       console.error("Camera access denied.", err);
       setSysStatus("COMPROMISED");
@@ -229,7 +266,7 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
         showToast("MEMORY CLEARED SUCCESSFULLY.", "success");
         console.log("Memory reset successfully.");
         // Ensure parent component un-flags warning too
-        onTelemetryUpdate({
+        onTelemetryUpdateRef.current({
           candidate_id: CANDIDATE_ID,
           risk_score: 0,
           violation_count: 0,
@@ -256,14 +293,25 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
       tracks.forEach(track => track.stop());
     }
     if (loopTimerRef.current) clearTimeout(loopTimerRef.current);
+    loopRunningRef.current = false;
     setIsScanning(false);
     setSysStatus("IDLE");
   };
 
+  // Expose stopCamera so the parent can auto-disengage on "End session".
+  useImperativeHandle(ref, () => ({ stopCamera }), []);
+
   // --- 4. THE SELF-HEALING ASYNC LOOP ---
+  // useCallback with no deps + refs for changing values keeps this function reference
+  // stable for the component's lifetime. This is critical: if the reference changed
+  // on parent re-renders, the scheduling useEffect would re-fire and spawn parallel
+  // chains, causing the 500ms-cadence pile-up we observed in the DB.
   const runInferenceLoop = useCallback(async () => {
-    // Only run if scanning AND FaceMesh actually picked up a face at any point
-    if (!videoRef.current || !canvasRef.current || !isScanning) return;
+    if (!loopRunningRef.current) return; // chain was cancelled (disengage / unmount)
+    if (!videoRef.current || !canvasRef.current) {
+      loopTimerRef.current = setTimeout(runInferenceLoop, 5000);
+      return;
+    }
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -302,17 +350,15 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
         });
 
         const data = await response.json();
-        
+
         if (data.risk_packet) {
           setRiskScore(data.risk_packet.risk_score);
           setViolationCount(data.risk_packet.violation_count);
           setInterventionLevel(data.risk_packet.intervention_level);
           setLatestVerdict(data.verdict);
 
-          // Pass data up to VoiceOrb
-          onTelemetryUpdate(data.risk_packet, data.verdict);
-
-
+          // Pass data up via stable ref — never re-binds the loop.
+          onTelemetryUpdateRef.current(data.risk_packet, data.verdict);
         }
       } catch (error) {
         console.log("Backend unreachable:", (error as Error).message);
@@ -320,185 +366,239 @@ export default function SniperScope({ onTelemetryUpdate }: SniperScopeProps) {
       }
     }
 
-    // Mathematical timing: exactly 5 seconds (12 FPM)
-    loopTimerRef.current = setTimeout(runInferenceLoop, 5000);
-  }, [isScanning, onTelemetryUpdate]);
+    // Schedule next tick only if the chain is still alive.
+    if (loopRunningRef.current) {
+      loopTimerRef.current = setTimeout(runInferenceLoop, 5000);
+    }
+  }, []);
 
   useEffect(() => {
-    // Only spin up the loops if we are scanning and the FaceMesh is confirmed downloaded
-    if (isScanning && isFaceMeshReady) {
+    // Single-flight: only one chain can ever be active at a time.
+    if (isScanning && isFaceMeshReady && !loopRunningRef.current) {
       if (videoRef.current && !gatekeeperRef.current) {
         gatekeeperRef.current = initGatekeeper(videoRef.current) as any;
       }
+      loopRunningRef.current = true;
       runInferenceLoop();
     }
     return () => {
-      if (loopTimerRef.current) clearTimeout(loopTimerRef.current);
+      // Cancel chain on unmount or when isScanning flips false.
+      loopRunningRef.current = false;
+      if (loopTimerRef.current) {
+        clearTimeout(loopTimerRef.current);
+        loopTimerRef.current = null;
+      }
     };
   }, [isScanning, isFaceMeshReady, runInferenceLoop]);
 
 
+  // ── Severity-colour helpers (single source of truth for the panel) ──────
+  const tierToken =
+    interventionLevel === "SEVERE_VIOLATION_LOGGED" ? "danger" :
+    interventionLevel === "HARD_WARNING"            ? "amber"  :
+    interventionLevel === "WARNING_LOGGED"          ? "amber"  :
+    interventionLevel === "SOFT_WARNING"            ? "warn"   :
+    "clear";
+
+  const tierStyles: Record<string, string> = {
+    clear:  "border-[var(--color-hairline)] bg-[var(--color-surface-2)] text-[var(--color-slate)]",
+    warn:   "border-[var(--color-warn)]/40 bg-[var(--color-warn)]/[0.06] text-[var(--color-warn)]",
+    amber:  "border-[var(--color-amber)]/40 bg-[var(--color-amber)]/[0.06] text-[var(--color-amber)]",
+    danger: "border-[var(--color-danger)]/45 bg-[var(--color-danger)]/[0.07] text-[var(--color-danger)]",
+  };
+
+  const riskColor =
+    riskScore >= 80 ? "text-[var(--color-danger)]" :
+    riskScore >= 40 ? "text-[var(--color-amber)]"  :
+    riskScore >= 20 ? "text-[var(--color-warn)]"   :
+    "text-[var(--color-snow)]";
+
   return (
-    <div className="w-full flex flex-col xl:flex-row gap-8 items-start relative">
-      
-      {/* Vercel/Linear Inspired Toast Notification */}
+    <div className="w-full flex flex-col xl:flex-row gap-6 items-start relative">
+
+      {/* Toast — minimal, hairline-bordered, no neon glow spam */}
       <AnimatePresence>
         {toast && (
           <motion.div
-            initial={{ opacity: 0, y: -20, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -10, scale: 0.95 }}
-            transition={{ duration: 0.2 }}
-            className={`absolute top-0 right-0 z-50 px-4 py-3 min-w-[250px] rounded-lg border font-mono text-xs font-bold tracking-widest backdrop-blur-xl shadow-2xl flex items-center justify-between
-              ${toast.type === "error" 
-                ? "bg-[#1a0505]/80 border-red-500/50 text-red-400" 
-                : "bg-[#051a0a]/80 border-sentry-neon/50 text-sentry-neon"}`}
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+            role="status"
+            className={`absolute top-0 right-0 z-50 flex items-center gap-2.5 px-3.5 py-2.5 min-w-[260px] rounded-lg border text-[12px] font-medium backdrop-blur-md ${
+              toast.type === "error"
+                ? "bg-[var(--color-surface)]/90 border-[var(--color-danger)]/40 text-[var(--color-danger)]"
+                : "bg-[var(--color-surface)]/90 border-[var(--color-signal)]/40 text-[var(--color-signal)]"
+            }`}
           >
-            <span className="flex items-center gap-2">
-              {toast.type === "error" ? (
-                <span className="text-red-500 animate-pulse">⚠️</span>
-              ) : (
-                <span className="w-2 h-2 rounded-full bg-sentry-neon shadow-[0_0_8px_#00FF41]"></span>
-              )}
-              {toast.message}
-            </span>
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                toast.type === "error" ? "bg-[var(--color-danger)]" : "bg-[var(--color-signal)]"
+              }`}
+            />
+            <span className="tracking-tight">{toast.message}</span>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* LEFT: THE OPTICS FEED */}
-      <div className="relative w-full xl:w-[800px] h-[450px] bg-[#0A0A0B] rounded-xl border border-sentry-border overflow-hidden flex-shrink-0 shadow-2xl">
-        
-        {/* Hidden Canvas for Cropping */}
+      {/* LEFT — Camera frame */}
+      <div
+        className={`relative w-full xl:w-[800px] h-[450px] rounded-xl overflow-hidden flex-shrink-0 lift-1 haze transition-shadow ${
+          sysStatus === "ACTIVE" ? "ring-signal" : ""
+        }`}
+      >
         <canvas ref={canvasRef} className="hidden" />
 
-        {/* Video Feed */}
-        <video 
-          ref={videoRef} 
-          autoPlay 
-          playsInline 
-          muted 
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
           className="w-full h-full object-cover"
         />
 
-        {/* Cyberpunk Scanlines */}
-        <div className="absolute inset-0 pointer-events-none bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 mix-blend-overlay" />
-        <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_4px,3px_100%] z-10" />
-
-        {/* UI Overlay */}
-        <div className="absolute top-4 left-4 z-20 flex gap-2">
-          <span className={`px-3 py-1 text-[10px] tracking-widest font-bold border rounded bg-black/50 backdrop-blur-sm
-            ${sysStatus === 'IDLE' ? 'border-gray-500 text-gray-500' : ''}
-            ${sysStatus === 'ACTIVE' ? 'border-sentry-neon text-sentry-neon shadow-[0_0_10px_rgba(0,255,65,0.3)]' : ''}
-          `}>
-            {sysStatus}
-          </span>
-        </div>
-
-        {/* The Targeting Crosshair */}
-        {sysStatus === 'ACTIVE' && (
-          <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-20">
-            <motion.div 
-              animate={{ rotate: 360 }} 
-              transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-              className="w-[320px] h-[320px] border border-sentry-neon/30 rounded-full flex items-center justify-center relative"
-            >
-              <div className="absolute w-full h-[1px] bg-sentry-neon/20" />
-              <div className="absolute h-full w-[1px] bg-sentry-neon/20" />
-              <div className="w-[300px] h-[300px] border border-sentry-neon/10 rounded-full" />
-            </motion.div>
+        {/* Idle-state placeholder grid (only when no stream) */}
+        {!isScanning && (
+          <div className="absolute inset-0 dot-grid flex items-center justify-center text-center">
+            <div className="flex flex-col items-center gap-3">
+              <div className="w-10 h-10 rounded-lg lift-2 flex items-center justify-center">
+                <span className="w-2 h-2 rounded-full bg-[var(--color-fog)]" />
+              </div>
+              <span className="eyebrow">Optics offline</span>
+              <span className="text-[12px] text-[var(--color-slate)] max-w-[280px] leading-relaxed">
+                Engage the sentry to begin local-only behavioural analysis.
+              </span>
+            </div>
           </div>
         )}
 
+        {/* Status chip — top-left */}
+        <div className="absolute top-3 left-3 z-20 flex items-center gap-2">
+          <span
+            className={`flex items-center gap-2 px-2.5 py-1 rounded-md text-[10px] font-medium tracking-[0.14em] uppercase backdrop-blur-md border ${
+              sysStatus === "ACTIVE"
+                ? "bg-[var(--color-signal)]/10 border-[var(--color-signal)]/40 text-[var(--color-signal)]"
+                : sysStatus === "COMPROMISED"
+                ? "bg-[var(--color-danger)]/10 border-[var(--color-danger)]/40 text-[var(--color-danger)]"
+                : "bg-[var(--color-surface)]/70 border-[var(--color-hairline)] text-[var(--color-slate)]"
+            }`}
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                sysStatus === "ACTIVE"
+                  ? "bg-[var(--color-signal)] pulse-signal"
+                  : sysStatus === "COMPROMISED"
+                  ? "bg-[var(--color-danger)] pulse-danger"
+                  : "bg-[var(--color-fog)]"
+              }`}
+            />
+            {sysStatus === "ACTIVE" ? "Live" : sysStatus === "COMPROMISED" ? "Blocked" : "Idle"}
+          </span>
 
-        {/* Controls */}
-        <div className="absolute bottom-4 right-4 z-20 flex gap-4">
-          {!isScanning && (
-            <button onClick={startCamera} className="px-6 py-2 bg-sentry-neon text-black font-bold text-xs tracking-widest hover:bg-white transition-colors cursor-pointer">
-              ENGAGE SENTRY
-            </button>
+          {sysStatus === "ACTIVE" && (
+            <span className="px-2.5 py-1 rounded-md text-[10px] font-medium tracking-[0.14em] uppercase backdrop-blur-md border bg-[var(--color-surface)]/70 border-[var(--color-hairline)] text-[var(--color-slate)]">
+              5s sample
+            </span>
           )}
-          {isScanning && (
-            <button onClick={stopCamera} className="px-6 py-2 border border-gray-500 text-gray-300 font-bold text-xs tracking-widest hover:bg-gray-800 transition-colors cursor-pointer bg-black/50 backdrop-blur-sm">
-              DISENGAGE
+        </div>
+
+        {/* Controls — bottom-right */}
+        <div className="absolute bottom-3 right-3 z-20 flex gap-2">
+          {!isScanning ? (
+            <button
+              onClick={startCamera}
+              className="px-4 h-9 rounded-md bg-[var(--color-iris)] text-white text-[12px] font-medium tracking-tight hover:bg-[var(--color-iris-hover)] active:bg-[var(--color-iris-press)] transition-colors cursor-pointer"
+            >
+              Engage sentry
+            </button>
+          ) : (
+            <button
+              onClick={stopCamera}
+              className="px-4 h-9 rounded-md bg-[var(--color-surface-2)]/80 backdrop-blur-md border border-[var(--color-hairline-strong)] text-[var(--color-parchment)] text-[12px] font-medium tracking-tight hover:bg-[var(--color-surface-3)] hover:text-[var(--color-snow)] transition-colors cursor-pointer"
+            >
+              Disengage
             </button>
           )}
         </div>
       </div>
 
-      {/* RIGHT: THE TELEMETRY STACK */}
+      {/* RIGHT — Telemetry stack */}
       <div className="flex-1 w-full flex flex-col gap-4">
-        
-        {/* Memory Graph / Risk Score (With react-bits Spotlight logic placeholder) */}
-        <div className="border border-sentry-border bg-[#0A0A0B] p-6 rounded-xl relative overflow-hidden group hover:border-sentry-border/80 transition-colors">
-          <div className="absolute inset-0 bg-gradient-to-br from-white/[0.02] to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-          
-          <div className="flex justify-between items-start mb-6">
-            <h3 className="text-[10px] tracking-widest text-gray-500 flex items-center gap-2">
-              <span className="w-1 h-1 bg-gray-500 rounded-full" />
-              BEA TEMPORAL GRAPH
-            </h3>
-            <button 
+
+        {/* BEA Temporal panel */}
+        <div className="lift-1 rounded-xl p-5">
+          <div className="flex justify-between items-center mb-5">
+            <span className="eyebrow flex items-center gap-2">
+              <span className="w-1 h-1 rounded-full bg-[var(--color-fog)]" />
+              BEA · Temporal
+            </span>
+            <button
               onClick={handleReset}
-              className="text-[9px] font-bold tracking-widest text-red-500 border border-red-500/30 bg-red-500/10 px-3 py-1.5 rounded hover:bg-red-500 hover:text-black transition-all duration-300 z-30 relative"
+              className="h-7 px-2.5 rounded-md text-[11px] font-medium text-[var(--color-slate)] border border-[var(--color-hairline)] bg-transparent hover:text-[var(--color-snow)] hover:border-[var(--color-hairline-strong)] hover:bg-[var(--color-surface-2)] transition-colors"
             >
-              [ CLEAR MEMORY ]
+              Clear memory
             </button>
           </div>
-          
-          <div className="flex flex-col mb-8">
-            <span className="text-[10px] tracking-widest text-gray-600 mb-2">CUMULATIVE RISK</span>
-            {/* THE GLITCH TEXT INTEGRATION */}
-            <h2 
-              data-text={riskScore === 100 ? "100%" : `${riskScore}%`}
-              className={`text-6xl font-black transition-colors duration-500 ${
-                riskScore === 100 
-                  ? "text-red-500 glitch-text drop-shadow-[0_0_15px_rgba(239,68,68,0.8)]" 
-                  : riskScore >= 40 
-                  ? "text-orange-400 drop-shadow-[0_0_10px_rgba(251,146,60,0.5)]" 
-                  : riskScore >= 20
-                  ? "text-yellow-400"
-                  : "text-white"
+
+          <div className="flex flex-col mb-6">
+            <span className="eyebrow mb-2">Cumulative risk</span>
+            <h2
+              data-text={`${riskScore}%`}
+              data-active={riskScore === 100 ? "true" : "false"}
+              className={`font-display text-[64px] leading-none tabular font-semibold transition-colors duration-500 ${riskColor} ${
+                riskScore === 100 ? "glitch-text" : ""
               }`}
             >
-              {riskScore}%
+              {riskScore}
+              <span className="text-[var(--color-slate)] text-[40px] font-medium">%</span>
             </h2>
           </div>
 
-          <div className={`p-4 rounded border flex justify-between items-center mb-6 transition-colors duration-500
-            ${interventionLevel === 'SEVERE_VIOLATION_LOGGED' ? 'border-red-500/30 bg-red-500/10 text-red-500' : 
-              interventionLevel === 'HARD_WARNING' ? 'border-orange-500/30 bg-orange-500/10 text-orange-400' :
-              interventionLevel === 'WARNING_LOGGED' ? 'border-orange-500/30 bg-orange-500/10 text-orange-400' : 
-              interventionLevel === 'SOFT_WARNING' ? 'border-yellow-500/30 bg-yellow-500/10 text-yellow-400' : 
-              'border-sentry-border bg-white/5 text-gray-400'}`}
-          >
-            <div className="flex flex-col">
-               <span className="text-[9px] tracking-widest opacity-70 mb-1">INTERVENTION TIER</span>
-               <span className="text-sm font-bold tracking-widest">{interventionLevel}</span>
+          {/* Intervention tier */}
+          <div className={`px-3.5 py-3 rounded-lg border flex justify-between items-center mb-5 transition-colors duration-500 ${tierStyles[tierToken]}`}>
+            <div className="flex flex-col gap-0.5">
+              <span className="eyebrow opacity-80">Intervention tier</span>
+              <span className="text-[13px] font-medium tracking-tight">{interventionLevel}</span>
             </div>
-            {interventionLevel !== 'CLEAR' && <span className="animate-pulse">⚠️</span>}
+            {interventionLevel !== "CLEAR" && (
+              <span className={`w-1.5 h-1.5 rounded-full bg-current ${
+                tierToken === "danger" ? "pulse-danger" : ""
+              }`} />
+            )}
           </div>
 
-          <div className="grid grid-cols-2 gap-4 border-t border-sentry-border pt-4">
-            <div className="flex flex-col">
-               <span className="text-[9px] tracking-widest text-gray-600 mb-1">VIOLATIONS</span>
-               <span className="text-lg font-bold">{violationCount}</span>
+          {/* Stats row */}
+          <div className="grid grid-cols-2 gap-3 pt-4 border-t border-[var(--color-hairline)]">
+            <div className="flex flex-col gap-1">
+              <span className="eyebrow">Violations</span>
+              <span className="text-[18px] font-semibold tabular text-[var(--color-snow)]">{violationCount}</span>
             </div>
-            <div className="flex flex-col">
-               <span className="text-[9px] tracking-widest text-gray-600 mb-1">WINDOW</span>
-               <span className="text-lg font-bold text-gray-400">5m</span>
+            <div className="flex flex-col gap-1">
+              <span className="eyebrow">Window</span>
+              <span className="text-[18px] font-semibold tabular text-[var(--color-parchment)]">5m</span>
             </div>
           </div>
         </div>
 
-        {/* Live VLM Inference Log */}
-        <div className="border border-sentry-border bg-[#0A0A0B] p-6 rounded-xl flex flex-col min-h-[120px]">
-           <h3 className="text-[10px] tracking-widest text-gray-500 mb-4 flex items-center gap-2">
-            <span className={`w-2 h-2 rounded-sm ${sysStatus === 'ACTIVE' ? 'bg-sentry-neon animate-pulse' : 'bg-gray-700'}`} />
-            VLM INFERENCE LOG
-          </h3>
-          <p className={`text-xs font-mono leading-relaxed ${latestVerdict.includes('CRITICAL') || latestVerdict.includes('FATAL') ? 'text-red-400' : 'text-gray-400'}`}>
-            &gt; {latestVerdict}
+        {/* VLM inference log */}
+        <div className="lift-1 rounded-xl p-5 flex flex-col min-h-[120px]">
+          <span className="eyebrow mb-3 flex items-center gap-2">
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                sysStatus === "ACTIVE" ? "bg-[var(--color-signal)] pulse-signal" : "bg-[var(--color-fog)]"
+              }`}
+            />
+            VLM inference log
+          </span>
+          <p
+            className={`font-mono text-[12px] leading-relaxed ${
+              latestVerdict.includes("CRITICAL") || latestVerdict.includes("FATAL")
+                ? "text-[var(--color-danger)]"
+                : "text-[var(--color-parchment)]"
+            }`}
+          >
+            <span className="text-[var(--color-fog)] mr-2">&gt;</span>
+            {latestVerdict}
           </p>
         </div>
 
