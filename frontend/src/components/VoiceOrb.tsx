@@ -54,16 +54,16 @@ export default function VoiceOrb({ onTranscriptUpdate }: VoiceOrbProps) {
   // ─── Orb visual mappings ────────────────────────────────────────────────
   // Single-token-per-state so palette stays consistent with the rest of the app.
   const stateMeta: Record<VoiceState, { label: string; token: string; rgba: string; rotate: number; duration: number; animScale: number | number[] }> = {
-    IDLE:    { label: "Standby",     token: "var(--color-fog)",    rgba: "98,102,109",  rotate: 0,   duration: 4,   animScale: 1 },
-    LISTEN:  { label: "Listening",   token: "var(--color-signal)", rgba: "0,217,146",   rotate: 0,   duration: 1.5, animScale: 1 },
-    PROCESS: { label: "Processing",  token: "var(--color-iris)",   rgba: "117,83,255",  rotate: 360, duration: 0.8, animScale: 0.94 },
-    SPEAK:   { label: "Speaking",    token: "var(--color-info)",   rgba: "76,179,212",  rotate: 0,   duration: 0.3, animScale: [1, 1.12, 0.94, 1.06, 1] },
+    IDLE:    { label: "Standby",     token: "var(--color-fog)",    rgba: "98,102,109",   rotate: 0,   duration: 4,   animScale: 1 },
+    LISTEN:  { label: "Listening",   token: "var(--color-signal)", rgba: "0,217,146",    rotate: 0,   duration: 1.5, animScale: 1 },
+    PROCESS: { label: "Processing",  token: "var(--color-mint)",   rgba: "47,214,161",   rotate: 360, duration: 0.8, animScale: 0.94 },
+    SPEAK:   { label: "Speaking",    token: "var(--color-info)",   rgba: "76,179,212",   rotate: 0,   duration: 0.3, animScale: [1, 1.12, 0.94, 1.06, 1] },
   };
 
   const v = stateMeta[voiceState];
 
   return (
-    <div className="lift-1 rounded-xl p-6 relative overflow-hidden flex flex-col items-center">
+    <div className="lift-1 rounded-lg p-6 relative overflow-hidden flex flex-col items-center">
       <button
         onClick={() => setDevMode(d => !d)}
         className="absolute top-2 right-2 w-4 h-4 bg-transparent hover:bg-[var(--color-surface-2)] rounded cursor-pointer z-50 transition-colors"
@@ -111,7 +111,7 @@ export default function VoiceOrb({ onTranscriptUpdate }: VoiceOrbProps) {
       </div>
 
       <p
-        className="text-[12px] font-medium tracking-tight transition-colors duration-500"
+        className="text-[12px] font-medium transition-colors duration-500"
         style={{ color: voiceState === "IDLE" ? "var(--color-slate)" : v.token }}
       >
         {v.label}
@@ -119,10 +119,10 @@ export default function VoiceOrb({ onTranscriptUpdate }: VoiceOrbProps) {
 
       <button
         onClick={() => setIsEngaged(!isEngaged)}
-        className={`mt-5 h-9 px-4 rounded-md text-[12px] font-medium tracking-tight border transition-colors cursor-pointer ${
+        className={`mt-5 h-9 px-4 rounded-md text-[12px] font-medium border transition-colors cursor-pointer ${
           isEngaged
-            ? "border-[var(--color-danger)]/40 text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"
-            : "border-[var(--color-iris)]/45 text-[var(--color-iris)] hover:bg-[var(--color-iris)]/10"
+            ? "bg-transparent border-[var(--color-danger)]/40 text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"
+            : "bg-[var(--color-surface)] border-[var(--color-hairline)] text-[var(--color-mint)] hover:border-[var(--color-signal)] hover:text-[var(--color-signal)]"
         }`}
       >
         {isEngaged ? "Deactivate sync" : "Activate sync"}
@@ -136,7 +136,7 @@ export default function VoiceOrb({ onTranscriptUpdate }: VoiceOrbProps) {
               <button
                 key={state}
                 onClick={() => setVoiceState(state)}
-                className={`px-2.5 h-7 text-[11px] font-medium tracking-tight rounded-md border transition-colors ${
+                className={`px-2.5 h-7 text-[11px] font-medium rounded-md border transition-colors ${
                   voiceState === state
                     ? "bg-[var(--color-surface-2)] border-[var(--color-hairline-strong)] text-[var(--color-snow)]"
                     : "border-[var(--color-hairline)] text-[var(--color-slate)] hover:text-[var(--color-snow)] hover:border-[var(--color-hairline-strong)]"

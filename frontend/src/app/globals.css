@@ -1,46 +1,47 @@
 @import "tailwindcss";
 
-/* ── Design tokens · Linear bones + Sentry accent + VoltAgent signal ── */
+/* ── VoltAgent Design System ── https://github.com/VoltAgent/awesome-design-md ── */
 @theme {
-  /* Surface ladder — 4 step (Linear) */
-  --color-canvas:    #050507;     /* page background */
-  --color-surface:   #0f1011;     /* cards, panels */
-  --color-surface-2: #141516;     /* nested / hovered */
-  --color-surface-3: #18191a;     /* dropdowns, popovers */
+  /* ── Surfaces — Abyss → Carbon (2-shade dark system) ────────────────── */
+  --color-canvas:    #050507;   /* Abyss Black — page background */
+  --color-surface:   #101010;   /* Carbon Surface — cards, panels */
+  --color-surface-2: #161616;   /* elevated / hovered */
+  --color-surface-3: #1d1d1d;   /* dropdowns, popovers */
 
-  /* Hairline borders */
-  --color-hairline:        #23252a;
-  --color-hairline-strong: #34343a;
+  /* ── Borders — Warm Charcoal containment (the signature warmth) ─────── */
+  --color-hairline:        #3d3a39;  /* Warm Charcoal */
+  --color-hairline-strong: #524f4d;
 
-  /* Brand accent — Sentry iris (single chromatic accent for CTAs/brand) */
-  --color-iris:        #7553ff;
-  --color-iris-hover:  #8c70ff;
-  --color-iris-press:  #604de0;
-
-  /* Status / signal — VoltAgent emerald (active/secure indicators only) */
+  /* ── Brand — Emerald Signal Green (the sole chromatic energy) ────────── */
   --color-signal:      #00d992;
   --color-signal-soft: rgba(0, 217, 146, 0.10);
+  --color-mint:        #2fd6a1;   /* VoltAgent Mint — button text variant */
 
-  /* Severity ladder (observability tradition) */
-  --color-warn:   #ffba00;
+  /* ── Legacy alias — iris now maps to Mint so no component refs break ── */
+  --color-iris:        #2fd6a1;
+  --color-iris-hover:  #00d992;
+  --color-iris-press:  #00b87a;
+
+  /* ── Severity ─────────────────────────────────────────────────────────── */
+  --color-warn:   #ffba00;   /* Warning Amber */
   --color-amber:  #ff8c2a;
-  --color-danger: #fb565b;
-  --color-info:   #4cb3d4;
+  --color-danger: #fb565b;   /* Danger Coral */
+  --color-info:   #4cb3d4;   /* Info Teal */
 
-  /* Text — Linear ink scale */
-  --color-snow:      #f7f8f8;
-  --color-parchment: #d0d6e0;
-  --color-slate:     #8a8f98;
-  --color-fog:       #62666d;
+  /* ── Text — Warm ink scale ────────────────────────────────────────────── */
+  --color-snow:      #f2f2f2;   /* Snow White — primary text */
+  --color-parchment: #b8b3b0;   /* Warm Parchment — secondary */
+  --color-slate:     #8b949e;   /* Steel Slate — tertiary / metadata */
+  --color-fog:       #62666d;   /* de-emphasized */
 
-  /* Back-compat — old class refs continue to render correctly */
+  /* ── Back-compat ─────────────────────────────────────────────────────── */
   --color-sentry-neon:   #00d992;
-  --color-sentry-border: #23252a;
+  --color-sentry-border: #3d3a39;
 
-  /* Type stacks (Geist already loaded by next/font in layout.tsx) */
-  --font-sans:    var(--font-geist-sans), -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-display: var(--font-geist-sans), -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono:    var(--font-geist-mono), "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  /* ── Type stacks ─────────────────────────────────────────────────────── */
+  --font-sans:    "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono:    "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 
 /* ── Body defaults ──────────────────────────────────────────────────── */
@@ -48,31 +49,36 @@ html, body {
   background-color: var(--color-canvas);
   color: var(--color-snow);
   font-family: var(--font-sans);
-  font-feature-settings: "calt", "rlig", "ss01";
+  font-feature-settings: "calt", "rlig";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 ::selection {
-  background: rgba(117, 83, 255, 0.35);
+  background: rgba(0, 217, 146, 0.22);
   color: var(--color-snow);
 }
 
-/* ── Typography utilities ───────────────────────────────────────────── */
-.font-display { font-family: var(--font-display); letter-spacing: -0.02em; }
-.font-mono    { font-family: var(--font-mono); }
-.tabular      { font-variant-numeric: tabular-nums; }
+/* ── Typography utilities ─────────────────────────────────────────────── */
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+}
+.font-mono { font-family: var(--font-mono); }
+.tabular   { font-variant-numeric: tabular-nums; }
 
-/* Eyebrow / overline labels — Linear spec (subtle, not screaming) */
+/* Eyebrow — uppercase overline labels with wide tracking */
 .eyebrow {
   font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.12em;
+  font-weight: 600;
+  letter-spacing: 0.45px;
   text-transform: uppercase;
   color: var(--color-slate);
 }
 
-/* ── Elevation — border-defined (Linear), no shadow spam ────────────── */
+/* ── Elevation — border-defined depth (VoltAgent philosophy) ─────────── */
+/* Depth comes from border weight + color, not shadows                    */
 .lift-1 {
   background: var(--color-surface);
   border: 1px solid var(--color-hairline);
@@ -82,42 +88,56 @@ html, body {
   border: 1px solid var(--color-hairline-strong);
 }
 
-/* Subtle ambient haze — only for the camera frame and hero panels */
+/* Warm Ambient Haze — Level 4 elevation (hover / featured cards) */
 .haze {
+  box-shadow: rgba(92, 88, 85, 0.20) 0px 0px 15px;
+}
+
+/* Dramatic Float — Level 5 elevation (hero / modals) */
+.haze-dramatic {
   box-shadow:
-    rgba(0, 0, 0, 0.45) 0px 12px 40px -12px,
-    rgba(255, 255, 255, 0.03) 0px 1px 0px 0px inset;
+    rgba(0, 0, 0, 0.70) 0px 20px 60px,
+    rgba(148, 163, 184, 0.10) 0px 0px 0px 1px inset;
 }
 
-/* Iris ring — for active/focused hero elements */
-.ring-iris {
-  box-shadow: 0 0 0 1px var(--color-iris), 0 0 24px rgba(117, 83, 255, 0.18);
-}
-
-/* Emerald ring — for SECURE / ACTIVE state on the camera frame */
+/* Signal ring — Emerald glow for ACTIVE / LIVE camera frame */
 .ring-signal {
-  box-shadow: 0 0 0 1px var(--color-signal), 0 0 24px rgba(0, 217, 146, 0.12);
+  box-shadow: 0 0 0 1px var(--color-signal), 0 0 28px rgba(0, 217, 146, 0.16);
 }
 
-/* Focus ring — Linear-style 2px iris at 50% */
+/* Iris ring alias → signal (backward compat) */
+.ring-iris {
+  box-shadow: 0 0 0 1px var(--color-signal), 0 0 24px rgba(0, 217, 146, 0.14);
+}
+
+/* Accent border — 2px Emerald for highlighted/active cards */
+.ring-accent {
+  border: 2px solid var(--color-signal) !important;
+  box-shadow: 0 0 16px rgba(0, 217, 146, 0.10);
+}
+
+/* Focus ring — VoltAgent Mint */
 *:focus-visible {
-  outline: 2px solid rgba(117, 83, 255, 0.55);
+  outline: 2px solid rgba(47, 214, 161, 0.55);
   outline-offset: 2px;
   border-radius: 6px;
 }
 
-/* Glitch-text — opt-in via data-active="true". No longer always-on. */
-.glitch-text[data-active="true"] {
-  position: relative;
+/* ── Green Signal Glow — the "power-on" pulse ───────────────────────── */
+/* Used on the brand dot and active indicators                            */
+@keyframes glow-pulse {
+  0%, 100% { filter: drop-shadow(0 0 2px #00d992); }
+  50%       { filter: drop-shadow(0 0 8px #00d992); }
 }
+.glow-pulse { animation: glow-pulse 2.4s ease-in-out infinite; }
+
+/* ── Glitch-text — opt-in via data-active="true" ───────────────────── */
+.glitch-text[data-active="true"] { position: relative; }
 .glitch-text[data-active="true"]::before,
 .glitch-text[data-active="true"]::after {
   content: attr(data-text);
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  position: absolute; top: 0; left: 0;
+  width: 100%; height: 100%;
   background: transparent;
 }
 .glitch-text[data-active="true"]::before {
@@ -131,13 +151,71 @@ html, body {
   animation: glitch-anim 3.2s infinite linear alternate-reverse;
 }
 
-/* Subtle dot-grid — for hero / empty-state panels only */
+/* ── Dot-grid — idle / empty-state panels ───────────────────────────── */
 .dot-grid {
   background-image: radial-gradient(rgba(184, 179, 176, 0.06) 1px, transparent 1px);
   background-size: 22px 22px;
 }
 
-/* Custom scrollbar — minimal, on-brand */
+/* ── Command shell — Warp-style terminal surface ────────────────────── */
+.command-shell {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 34%),
+    var(--color-surface);
+  border: 1px solid var(--color-hairline);
+  border-radius: 8px;
+}
+
+.command-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  border-radius: 8px 0 0 8px;
+  background: linear-gradient(
+    180deg,
+    var(--color-signal),
+    var(--color-info)   35%,
+    var(--color-warn)   68%,
+    var(--color-danger)
+  );
+}
+
+/* Terminal slab — for idle / offline placeholder panels */
+.terminal-slab {
+  background:
+    linear-gradient(180deg, rgba(0, 217, 146, 0.06), transparent 42%),
+    var(--color-canvas);
+  border: 1px solid var(--color-hairline);
+  border-radius: 8px;
+}
+
+/* Command row — hover row highlight */
+.command-row {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+.command-row:hover {
+  background: var(--color-surface-2);
+  border-color: var(--color-hairline);
+}
+
+/* Keycap */
+.keycap {
+  display: inline-flex;
+  min-width: 22px; height: 22px;
+  align-items: center; justify-content: center;
+  border-radius: 4px;
+  border: 1px solid var(--color-hairline-strong);
+  background: linear-gradient(180deg, var(--color-surface-3), var(--color-surface-2));
+  color: var(--color-parchment);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* ── Custom scrollbar — minimal, Warm Charcoal branded ──────────────── */
 *::-webkit-scrollbar { width: 8px; height: 8px; }
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb {
@@ -146,7 +224,7 @@ html, body {
 }
 *::-webkit-scrollbar-thumb:hover { background: var(--color-hairline-strong); }
 
-/* ── Keyframes ──────────────────────────────────────────────────────── */
+/* ── Keyframes ───────────────────────────────────────────────────────── */
 @keyframes glitch-anim {
   0%   { clip-path: inset(10% 0 80% 0); transform: translate(-1px,  1px); }
   20%  { clip-path: inset(80% 0  5% 0); transform: translate( 1px, -1px); }
@@ -157,19 +235,14 @@ html, body {
 }
 
 @keyframes pulse-signal {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(0, 217, 146, 0.55); }
+  0%, 100% { box-shadow: 0 0 0 0   rgba(0, 217, 146, 0.60); }
   50%      { box-shadow: 0 0 0 6px rgba(0, 217, 146, 0);    }
 }
 .pulse-signal { animation: pulse-signal 2.2s ease-out infinite; }
-
-@keyframes pulse-iris {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(117, 83, 255, 0.55); }
-  50%      { box-shadow: 0 0 0 6px rgba(117, 83, 255, 0);    }
-}
-.pulse-iris { animation: pulse-iris 2.2s ease-out infinite; }
+.pulse-iris   { animation: pulse-signal 2.2s ease-out infinite; } /* alias */
 
 @keyframes pulse-danger {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(251, 86, 91, 0.6); }
-  50%      { box-shadow: 0 0 0 6px rgba(251, 86, 91, 0);   }
+  0%, 100% { box-shadow: 0 0 0 0   rgba(251, 86, 91, 0.60); }
+  50%      { box-shadow: 0 0 0 6px rgba(251, 86, 91, 0);    }
 }
 .pulse-danger { animation: pulse-danger 1.6s ease-out infinite; }

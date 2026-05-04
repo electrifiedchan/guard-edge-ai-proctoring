@@ -68,7 +68,7 @@ export default function VerdictPage() {
             <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-iris)] pulse-iris" />
             <span className="eyebrow">Session complete · coaching report</span>
           </div>
-          <h1 className="font-display text-[36px] md:text-[44px] font-semibold tracking-tight text-[var(--color-snow)] leading-[1.05]">
+          <h1 className="font-display text-[36px] md:text-[44px] font-semibold text-[var(--color-snow)] leading-[1.05]">
             Here&apos;s what we noticed,
             <span className="text-[var(--color-slate)]"> point by point.</span>
           </h1>
@@ -89,7 +89,7 @@ export default function VerdictPage() {
           <motion.div
             initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4, delay: 0.05 }}
-            className="lift-1 rounded-xl p-5"
+            className="lift-1 rounded-lg p-5"
           >
             <span className="eyebrow">Peak risk</span>
             <div className="flex items-baseline gap-2 mt-2">
@@ -104,7 +104,7 @@ export default function VerdictPage() {
           <motion.div
             initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4, delay: 0.1 }}
-            className="lift-1 rounded-xl p-5"
+            className="lift-1 rounded-lg p-5"
           >
             <span className="eyebrow">Flagged events</span>
             <div className="flex items-baseline gap-2 mt-2">
@@ -118,12 +118,12 @@ export default function VerdictPage() {
           <motion.div
             initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4, delay: 0.15 }}
-            className="lift-1 rounded-xl p-5"
+            className="lift-1 rounded-lg p-5"
           >
             <span className="eyebrow">Dominant pattern</span>
             <div className="mt-2">
               {violationEntries.length > 0 ? (
-                <span className="font-display text-[18px] font-semibold tracking-tight text-[var(--color-snow)] leading-tight">
+                <span className="font-display text-[18px] font-semibold text-[var(--color-snow)] leading-tight">
                   {VIOLATION_TEMPLATES[violationEntries[0][0]].title}
                 </span>
               ) : (
@@ -140,7 +140,7 @@ export default function VerdictPage() {
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.2 }}
-          className="lift-1 haze rounded-xl p-7 mt-6 relative overflow-hidden"
+          className="lift-1 haze rounded-lg p-7 mt-6 relative overflow-hidden"
         >
           <div className="absolute top-0 left-6 right-6 h-px bg-gradient-to-r from-transparent via-[var(--color-iris)]/50 to-transparent" />
           <div className="flex items-center gap-2.5 mb-4">
@@ -167,7 +167,7 @@ export default function VerdictPage() {
           <div className="flex items-end justify-between mb-4">
             <div className="flex flex-col gap-1">
               <span className="eyebrow">Detailed breakdown</span>
-              <h2 className="font-display text-[22px] font-semibold tracking-tight text-[var(--color-snow)]">
+              <h2 className="font-display text-[22px] font-semibold text-[var(--color-snow)]">
                 Every pattern we logged, with the fix.
               </h2>
             </div>
@@ -177,7 +177,7 @@ export default function VerdictPage() {
           </div>
 
           {violationEntries.length === 0 ? (
-            <div className="lift-1 rounded-xl p-8 text-center">
+            <div className="lift-1 rounded-lg p-8 text-center">
               <span className="eyebrow text-[var(--color-signal)]">Clean run</span>
               <p className="text-[14px] text-[var(--color-parchment)] mt-2">
                 No behavioural patterns crossed the warning threshold this session. Hold this baseline.
@@ -204,7 +204,7 @@ export default function VerdictPage() {
           </span>
           <button
             onClick={() => router.push("/")}
-            className="h-9 px-4 rounded-md bg-[var(--color-iris)] text-white text-[12px] font-medium tracking-tight hover:bg-[var(--color-iris-hover)] active:bg-[var(--color-iris-press)] transition-colors cursor-pointer"
+            className="h-9 px-4 rounded-md bg-[var(--color-iris)] text-white text-[12px] font-medium hover:bg-[var(--color-iris-hover)] active:bg-[var(--color-iris-press)] transition-colors cursor-pointer"
           >
             Return to dashboard
           </button>

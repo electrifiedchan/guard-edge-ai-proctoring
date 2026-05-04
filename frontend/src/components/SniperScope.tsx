@@ -86,13 +86,13 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
       for (const device of videoDevices) {
         const label = device.label.toLowerCase();
         if (blocklist.some(token => label.includes(token))) {
-          console.error("🚨 HARDWARE TRIPWIRE: Virtual Camera Detected:", device.label);
+          console.warn("Hardware tripwire: virtual camera detected:", device.label);
           return { compromised: true, label: device.label };
         }
       }
       return { compromised: false };
-    } catch (err) {
-      console.error("Hardware scan failed", err);
+    } catch {
+      console.warn("Hardware scan failed.");
       return { compromised: false };
     }
   };
@@ -236,8 +236,8 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
       }
       // The post-mount useEffect picks up isScanning=true and starts the inference
       // loop. Calling it here too would double-start parallel chains.
-    } catch (err) {
-      console.error("Camera access denied.", err);
+    } catch {
+      console.warn("Camera access denied.");
       setSysStatus("COMPROMISED");
       setLatestVerdict("ERROR: OPTICS UNAVAILABLE. CHECK PERMISSIONS.");
     }
@@ -273,8 +273,8 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
           intervention_level: "CLEAR"
         }, "SYSTEM STANDBY");
       }
-    } catch (err) {
-      console.error("Failed to reset session:", err);
+    } catch {
+      console.warn("Failed to reset session.");
     }
   };
 
@@ -436,14 +436,14 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
                 toast.type === "error" ? "bg-[var(--color-danger)]" : "bg-[var(--color-signal)]"
               }`}
             />
-            <span className="tracking-tight">{toast.message}</span>
+            <span>{toast.message}</span>
           </motion.div>
         )}
       </AnimatePresence>
 
       {/* LEFT — Camera frame */}
       <div
-        className={`relative w-full xl:w-[800px] h-[450px] rounded-xl overflow-hidden flex-shrink-0 lift-1 haze transition-shadow ${
+        className={`relative w-full xl:w-[800px] h-[450px] rounded-lg overflow-hidden flex-shrink-0 lift-1 haze transition-shadow ${
           sysStatus === "ACTIVE" ? "ring-signal" : ""
         }`}
       >
@@ -459,15 +459,22 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
 
         {/* Idle-state placeholder grid (only when no stream) */}
         {!isScanning && (
-          <div className="absolute inset-0 dot-grid flex items-center justify-center text-center">
-            <div className="flex flex-col items-center gap-3">
-              <div className="w-10 h-10 rounded-lg lift-2 flex items-center justify-center">
-                <span className="w-2 h-2 rounded-full bg-[var(--color-fog)]" />
+          <div className="absolute inset-0 dot-grid flex items-center justify-center text-center p-6">
+            <div className="terminal-slab w-full max-w-[430px] p-4 text-left haze">
+              <div className="flex items-center justify-between mb-4">
+                <span className="eyebrow">Optics offline</span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-[var(--color-danger)]" />
+                  <span className="w-2 h-2 rounded-full bg-[var(--color-warn)]" />
+                  <span className="w-2 h-2 rounded-full bg-[var(--color-signal)]" />
+                </span>
               </div>
-              <span className="eyebrow">Optics offline</span>
-              <span className="text-[12px] text-[var(--color-slate)] max-w-[280px] leading-relaxed">
-                Engage the sentry to begin local-only behavioural analysis.
-              </span>
+              <div className="font-mono text-[12px] leading-relaxed">
+                <div className="text-[var(--color-slate)]">&gt; load gatekeeper.face_mesh</div>
+                <div className="text-[var(--color-slate)]">&gt; attach camera.stream</div>
+                <div className="text-[var(--color-signal)]">&gt; ready: local inference only</div>
+                <div className="text-[var(--color-parchment)] mt-3">Press Engage sentry to begin behavioural analysis.</div>
+              </div>
             </div>
           </div>
         )}
@@ -475,7 +482,7 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
         {/* Status chip — top-left */}
         <div className="absolute top-3 left-3 z-20 flex items-center gap-2">
           <span
-            className={`flex items-center gap-2 px-2.5 py-1 rounded-md text-[10px] font-medium tracking-[0.14em] uppercase backdrop-blur-md border ${
+            className={`flex items-center gap-2 px-2.5 py-1 rounded-md text-[10px] font-medium uppercase backdrop-blur-md border ${
               sysStatus === "ACTIVE"
                 ? "bg-[var(--color-signal)]/10 border-[var(--color-signal)]/40 text-[var(--color-signal)]"
                 : sysStatus === "COMPROMISED"
@@ -496,7 +503,7 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
           </span>
 
           {sysStatus === "ACTIVE" && (
-            <span className="px-2.5 py-1 rounded-md text-[10px] font-medium tracking-[0.14em] uppercase backdrop-blur-md border bg-[var(--color-surface)]/70 border-[var(--color-hairline)] text-[var(--color-slate)]">
+            <span className="px-2.5 py-1 rounded-md text-[10px] font-medium uppercase backdrop-blur-md border bg-[var(--color-surface)]/70 border-[var(--color-hairline)] text-[var(--color-slate)]">
               5s sample
             </span>
           )}
@@ -507,14 +514,14 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
           {!isScanning ? (
             <button
               onClick={startCamera}
-              className="px-4 h-9 rounded-md bg-[var(--color-iris)] text-white text-[12px] font-medium tracking-tight hover:bg-[var(--color-iris-hover)] active:bg-[var(--color-iris-press)] transition-colors cursor-pointer"
+              className="px-4 h-9 rounded-md bg-[var(--color-surface)] text-[var(--color-mint)] text-[12px] font-medium border border-[var(--color-hairline)] hover:border-[var(--color-signal)] hover:text-[var(--color-signal)] transition-colors cursor-pointer backdrop-blur-md"
             >
               Engage sentry
             </button>
           ) : (
             <button
               onClick={stopCamera}
-              className="px-4 h-9 rounded-md bg-[var(--color-surface-2)]/80 backdrop-blur-md border border-[var(--color-hairline-strong)] text-[var(--color-parchment)] text-[12px] font-medium tracking-tight hover:bg-[var(--color-surface-3)] hover:text-[var(--color-snow)] transition-colors cursor-pointer"
+              className="px-4 h-9 rounded-md bg-[var(--color-surface)]/80 backdrop-blur-md border border-[var(--color-hairline)] text-[var(--color-slate)] text-[12px] font-medium hover:border-[var(--color-danger)]/50 hover:text-[var(--color-danger)] transition-colors cursor-pointer"
             >
               Disengage
             </button>
@@ -526,7 +533,7 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
       <div className="flex-1 w-full flex flex-col gap-4">
 
         {/* BEA Temporal panel */}
-        <div className="lift-1 rounded-xl p-5">
+        <div className="lift-1 rounded-lg p-5">
           <div className="flex justify-between items-center mb-5">
             <span className="eyebrow flex items-center gap-2">
               <span className="w-1 h-1 rounded-full bg-[var(--color-fog)]" />
@@ -534,7 +541,7 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
             </span>
             <button
               onClick={handleReset}
-              className="h-7 px-2.5 rounded-md text-[11px] font-medium text-[var(--color-slate)] border border-[var(--color-hairline)] bg-transparent hover:text-[var(--color-snow)] hover:border-[var(--color-hairline-strong)] hover:bg-[var(--color-surface-2)] transition-colors"
+              className="h-7 px-2.5 rounded-md text-[11px] font-medium text-[var(--color-slate)] border border-[var(--color-hairline)] bg-transparent hover:text-[var(--color-danger)] hover:border-[var(--color-danger)]/50 transition-colors cursor-pointer"
             >
               Clear memory
             </button>
@@ -545,12 +552,12 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
             <h2
               data-text={`${riskScore}%`}
               data-active={riskScore === 100 ? "true" : "false"}
-              className={`font-display text-[64px] leading-none tabular font-semibold transition-colors duration-500 ${riskColor} ${
+              className={`font-display text-[64px] leading-none tabular font-semibold tracking-tight transition-colors duration-500 ${riskColor} ${
                 riskScore === 100 ? "glitch-text" : ""
               }`}
             >
               {riskScore}
-              <span className="text-[var(--color-slate)] text-[40px] font-medium">%</span>
+              <span className="text-[var(--color-fog)] text-[36px] font-medium ml-0.5">%</span>
             </h2>
           </div>
 
@@ -558,7 +565,7 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
           <div className={`px-3.5 py-3 rounded-lg border flex justify-between items-center mb-5 transition-colors duration-500 ${tierStyles[tierToken]}`}>
             <div className="flex flex-col gap-0.5">
               <span className="eyebrow opacity-80">Intervention tier</span>
-              <span className="text-[13px] font-medium tracking-tight">{interventionLevel}</span>
+              <span className="text-[13px] font-medium">{interventionLevel}</span>
             </div>
             {interventionLevel !== "CLEAR" && (
               <span className={`w-1.5 h-1.5 rounded-full bg-current ${
@@ -581,7 +588,7 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
         </div>
 
         {/* VLM inference log */}
-        <div className="lift-1 rounded-xl p-5 flex flex-col min-h-[120px]">
+        <div className="lift-1 rounded-lg p-5 flex flex-col min-h-[120px]">
           <span className="eyebrow mb-3 flex items-center gap-2">
             <span
               className={`w-1.5 h-1.5 rounded-full ${
