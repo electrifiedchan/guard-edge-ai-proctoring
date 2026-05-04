@@ -7,6 +7,7 @@ import VoiceOrb from "@/components/VoiceOrb";
 import AuditTrail from "@/components/AuditTrail";
 import LoadingOverlay from "@/components/LoadingOverlay";
 
+
 export default function Home() {
   const router = useRouter();
   const sniperRef = useRef<SniperScopeHandle>(null);
@@ -125,21 +126,19 @@ export default function Home() {
         setLiveTranscript("ERROR: Failed to generate report.");
         setIsGenerating(false);
       }
-    } catch (e) {
-      console.error(e);
+    } catch {
       setLiveTranscript("ERROR: Backend unreachable.");
       setIsGenerating(false);
     }
   };
 
   return (
-    <main className="min-h-screen bg-[var(--color-canvas)] flex flex-col px-8 py-7 text-[var(--color-parchment)] items-center overflow-x-hidden">
-
-      {/* Top bar — Linear-style: dense hairline, brand-mark left, primary action right */}
-      <header className="w-full max-w-[1400px] mb-8 flex justify-between items-center border-b border-[var(--color-hairline)] pb-5">
+    <main className="min-h-screen bg-[var(--color-canvas)] flex flex-col px-5 md:px-8 py-7 text-[var(--color-parchment)] items-center overflow-x-hidden">
+      {/* Top bar — VoltAgent terminal-native: brand left, CTA right */}
+      <header className="w-full max-w-[1400px] mb-5 flex justify-between items-center border-b border-[var(--color-hairline)] pb-5">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg lift-2 flex items-center justify-center">
-            <span className="w-2 h-2 rounded-full bg-[var(--color-iris)] pulse-iris" />
+            <span className="w-2 h-2 rounded-full bg-[var(--color-signal)] glow-pulse" />
           </div>
           <div className="flex flex-col">
             <h1 className="font-display text-[18px] font-semibold tracking-tight text-[var(--color-snow)] leading-none">
@@ -157,12 +156,13 @@ export default function Home() {
           <button
             onClick={handleEndSession}
             disabled={isGenerating}
-            className="h-9 px-4 rounded-md bg-[var(--color-iris)] text-white text-[12px] font-medium tracking-tight hover:bg-[var(--color-iris-hover)] active:bg-[var(--color-iris-press)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            className="h-9 px-4 rounded-md bg-[var(--color-surface)] text-[var(--color-mint)] text-[12px] font-medium border border-[var(--color-hairline)] hover:border-[var(--color-signal)] hover:text-[var(--color-signal)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
           >
             {isGenerating ? "Analyzing…" : "End session · generate report"}
           </button>
         </div>
       </header>
+
 
       {/* Dashboard grid */}
       <div className="w-full max-w-[1400px] flex flex-col 2xl:flex-row gap-6 items-start justify-center">
@@ -177,7 +177,7 @@ export default function Home() {
           <VoiceOrb onTranscriptUpdate={setLiveTranscript} />
 
           {/* Live transcript */}
-          <div className="lift-1 rounded-xl p-5 flex flex-col min-h-[200px] relative overflow-hidden">
+          <div className="lift-1 rounded-lg p-5 flex flex-col min-h-[200px] relative overflow-hidden">
             <div
               className={`absolute top-0 left-0 w-full h-px transition-colors duration-300 ${
                 isTranscribing ? "bg-[var(--color-signal)]" : "bg-[var(--color-hairline)]"

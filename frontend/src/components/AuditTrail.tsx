@@ -16,17 +16,23 @@ interface AuditLog {
 export default function AuditTrail() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [backendOnline, setBackendOnline] = useState(true);
 
   useEffect(() => {
     const fetchLogs = async () => {
       try {
-        const response = await fetch("http://localhost:8080/api/v1/logs");
+        const response = await fetch("http://localhost:8080/api/v1/logs", {
+          cache: "no-store",
+        });
         if (response.ok) {
           const data = await response.json();
           setLogs(data);
+          setBackendOnline(true);
+        } else {
+          setBackendOnline(false);
         }
-      } catch (error) {
-        console.error("Failed to fetch audit logs:", error);
+      } catch {
+        setBackendOnline(false);
       } finally {
         setLoading(false);
       }
@@ -62,16 +68,25 @@ export default function AuditTrail() {
               "text-[var(--color-signal)] bg-[var(--color-signal)]/[0.06] border-[var(--color-signal)]/25";
 
   return (
-    <div className="w-full h-full lift-1 rounded-xl p-5 overflow-hidden flex flex-col">
+    <div className="w-full h-full lift-1 rounded-lg p-5 overflow-hidden flex flex-col">
       <div className="flex items-center justify-between mb-4">
         <div className="flex flex-col">
           <span className="eyebrow mb-1">Audit trail</span>
-          <h2 className="font-display text-[18px] font-semibold tracking-tight text-[var(--color-snow)]">
+          <h2 className="font-display text-[18px] font-semibold text-[var(--color-snow)]">
             Security events
           </h2>
         </div>
-        <span className="text-[11px] text-[var(--color-slate)] tabular">
-          {logs.length} {logs.length === 1 ? "entry" : "entries"}
+        <span
+          className={`inline-flex items-center gap-2 text-[11px] tabular ${
+            backendOnline ? "text-[var(--color-slate)]" : "text-[var(--color-amber)]"
+          }`}
+        >
+          <span
+            className={`w-1.5 h-1.5 rounded-full ${
+              backendOnline ? "bg-[var(--color-signal)]" : "bg-[var(--color-amber)]"
+            }`}
+          />
+          {backendOnline ? `${logs.length} ${logs.length === 1 ? "entry" : "entries"}` : "backend offline"}
         </span>
       </div>
 
@@ -84,12 +99,12 @@ export default function AuditTrail() {
           <table className="w-full text-left border-collapse text-[12.5px]">
             <thead className="sticky top-0 bg-[var(--color-surface)] z-10">
               <tr className="text-[var(--color-slate)] border-b border-[var(--color-hairline)]">
-                <th className="py-2.5 px-3 font-medium uppercase text-[10px] tracking-[0.12em]">Time</th>
-                <th className="py-2.5 px-3 font-medium uppercase text-[10px] tracking-[0.12em]">Candidate</th>
-                <th className="py-2.5 px-3 font-medium uppercase text-[10px] tracking-[0.12em]">Gaze</th>
-                <th className="py-2.5 px-3 font-medium uppercase text-[10px] tracking-[0.12em]">Risk</th>
-                <th className="py-2.5 px-3 font-medium uppercase text-[10px] tracking-[0.12em]">Level</th>
-                <th className="py-2.5 px-3 font-medium uppercase text-[10px] tracking-[0.12em] w-1/3">Logic trace</th>
+                <th className="py-2.5 px-3 font-medium uppercase text-[10px]">Time</th>
+                <th className="py-2.5 px-3 font-medium uppercase text-[10px]">Candidate</th>
+                <th className="py-2.5 px-3 font-medium uppercase text-[10px]">Gaze</th>
+                <th className="py-2.5 px-3 font-medium uppercase text-[10px]">Risk</th>
+                <th className="py-2.5 px-3 font-medium uppercase text-[10px]">Level</th>
+                <th className="py-2.5 px-3 font-medium uppercase text-[10px] w-1/3">Logic trace</th>
               </tr>
             </thead>
             <tbody>
@@ -120,8 +135,15 @@ export default function AuditTrail() {
               ))}
               {logs.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={6} className="text-center py-8 text-[var(--color-slate)] text-[13px]">
-                    No anomalies detected in recent memory.
+                  <td
+                    colSpan={6}
+                    className={`text-center py-8 text-[13px] ${
+                      backendOnline ? "text-[var(--color-slate)]" : "text-[var(--color-amber)]"
+                    }`}
+                  >
+                    {backendOnline
+                      ? "No anomalies detected in recent memory."
+                      : "Audit backend is offline. Start FastAPI on port 8080 to stream events."}
                   </td>
                 </tr>
               )}

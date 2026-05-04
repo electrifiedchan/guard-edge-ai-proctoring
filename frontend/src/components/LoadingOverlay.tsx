@@ -54,7 +54,7 @@ export default function LoadingOverlay({ open, messages = DEFAULT_MESSAGES }: Lo
             animate={{ y: 0, opacity: 1, filter: "blur(0px)" }}
             exit={{ y: 4, opacity: 0 }}
             transition={{ duration: 0.28, ease: "easeOut" }}
-            className="relative lift-1 haze rounded-2xl px-8 py-7 min-w-[360px] max-w-[440px] flex flex-col"
+            className="relative lift-1 haze rounded-lg px-8 py-7 min-w-[360px] max-w-[440px] flex flex-col"
           >
             {/* Top hairline — iris signal */}
             <div className="absolute top-0 left-6 right-6 h-px bg-gradient-to-r from-transparent via-[var(--color-iris)]/60 to-transparent" />
@@ -62,14 +62,14 @@ export default function LoadingOverlay({ open, messages = DEFAULT_MESSAGES }: Lo
             {/* Eyebrow + indicator */}
             <div className="flex items-center gap-2.5 mb-5">
               <span className="relative flex w-2 h-2">
-                <span className="absolute inset-0 rounded-full bg-[var(--color-iris)] pulse-iris" />
-                <span className="relative inline-flex w-2 h-2 rounded-full bg-[var(--color-iris)]" />
+                <span className="absolute inset-0 rounded-full bg-[var(--color-signal)] pulse-signal" />
+                <span className="relative inline-flex w-2 h-2 rounded-full bg-[var(--color-signal)]" />
               </span>
               <span className="eyebrow">Generating report</span>
             </div>
 
             {/* Headline */}
-            <h2 className="font-display text-[22px] font-semibold tracking-tight text-[var(--color-snow)] leading-tight mb-2">
+            <h2 className="font-display text-[22px] font-semibold text-[var(--color-snow)] leading-tight mb-2">
               Your coach is reviewing the session.
             </h2>
             <p className="text-[12.5px] text-[var(--color-slate)] leading-relaxed mb-6">
@@ -81,7 +81,7 @@ export default function LoadingOverlay({ open, messages = DEFAULT_MESSAGES }: Lo
               {/* Progress sweep — purely visual cadence cue, not real progress */}
               <motion.div
                 aria-hidden
-                className="absolute inset-y-0 left-0 w-24 bg-gradient-to-r from-transparent via-[var(--color-iris)]/15 to-transparent"
+                className="absolute inset-y-0 left-0 w-24 bg-gradient-to-r from-transparent via-[var(--color-signal)]/15 to-transparent"
                 initial={{ x: "-100%" }}
                 animate={{ x: "420%" }}
                 transition={{
@@ -111,7 +111,7 @@ export default function LoadingOverlay({ open, messages = DEFAULT_MESSAGES }: Lo
                 <span
                   key={i}
                   className={`h-[2px] flex-1 rounded-full transition-colors duration-300 ${
-                    i <= idx ? "bg-[var(--color-iris)]/70" : "bg-[var(--color-hairline)]"
+                    i <= idx ? "bg-[var(--color-signal)]/70" : "bg-[var(--color-hairline)]"
                   }`}
                 />
               ))}

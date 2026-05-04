@@ -36,13 +36,13 @@ export default function ViolationCard({ type, bucket, index }: ViolationCardProp
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay: 0.08 * index, ease: "easeOut" }}
-      className={`lift-1 rounded-xl p-5 flex flex-col gap-4 border ${tokens.ring}`}
+      className={`lift-1 rounded-lg p-5 flex flex-col gap-4 border ${tokens.ring}`}
     >
       {/* Header row */}
       <header className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <span className={`w-1.5 h-1.5 rounded-full ${tokens.dot}`} />
-          <h3 className="font-display text-[15px] font-semibold tracking-tight text-[var(--color-snow)] leading-tight">
+          <h3 className="font-display text-[15px] font-semibold text-[var(--color-snow)] leading-tight">
             {tpl.title}
           </h3>
         </div>
