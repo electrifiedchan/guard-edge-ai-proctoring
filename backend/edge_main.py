@@ -141,13 +141,14 @@ def determine_verdict(detected_objects: list, faces: int, talking: bool, head_po
         is_critical = True
         verdict = "CRITICAL: Prohibited item detected on desk."
 
-    elif head_pose in ["left", "right", "up"]:
+    elif head_pose in ["HEAD_LEFT", "HEAD_RIGHT", "HEAD_UP"]:
         gaze = "SIDE_OR_UP"
-        verdict = f"Attention drift detected: candidate looking {head_pose}."
+        direction = head_pose.replace("HEAD_", "").lower()
+        verdict = f"Attention drift detected: head tilted {direction} (possible off-screen glance)."
 
-    elif head_pose == "down":
+    elif head_pose == "HEAD_DOWN":
         gaze = "DOWN"
-        verdict = "Candidate looking downward — possible reference material."
+        verdict = "Attention drift detected: head tilted down (possible off-screen glance)."
 
     if talking and not is_critical:
         verdict += " Verbal activity detected — possible earpiece coaching."
@@ -162,7 +163,8 @@ class FramePayload(BaseModel):
     image_base64: str
     faces_detected: int = 1
     is_talking: bool = False
-    head_pose: str = "center"
+    head_pose: str = "HEAD_CENTER"
+    gaze_vector: list[float] | None = None
 
 @app.post("/api/v1/analyze-frame")
 async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks):

@@ -24,10 +24,23 @@ interface SniperScopeProps {
 export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
   const loopTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const [isScanning, setIsScanning] = useState(false);
   const [sysStatus, setSysStatus] = useState<"IDLE" | "ACTIVE" | "COMPROMISED">("IDLE");
+  
+  // Calibration State
+  const [isCalibrating, setIsCalibrating] = useState(false);
+  const calibrationRef = useRef({
+    isCalibrating: false,
+    samples: [] as { pitchRatio: number, noseX: number, gazeX: number, gazeY: number }[],
+    baselinePitch: null as number | null,
+    baselineYaw: null as number | null,
+    baselineGazeX: null as number | null,
+    baselineGazeY: null as number | null,
+    startTime: 0
+  });
   
   // Telemetry State
   const [riskScore, setRiskScore] = useState(0);
@@ -44,7 +57,8 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
   const telemetryRef = useRef({
     faces_detected: 0, // Better default so we don't spam multiple face alerts before real data
     is_talking: false,
-    head_pose: "center"
+    head_pose: "HEAD_CENTER",
+    gaze_vector: [0, 0]
   });
   const gatekeeperRef = useRef<{ camera: any; faceMesh: any } | null>(null);
 
@@ -97,6 +111,67 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
     }
   };
 
+  // --- 1.5 DYNAMIC POSE CLASSIFICATION ---
+  const classifyPose = (pitchRatio: number, noseX: number, baselinePitch: number | null, baselineYaw: number | null) => {
+    const PITCH_DELTA = 0.35;
+    const YAW_DELTA = 0.10;
+    
+    if (baselinePitch !== null && baselineYaw !== null) {
+      if (pitchRatio > baselinePitch + PITCH_DELTA) return "HEAD_DOWN";
+      if (pitchRatio < baselinePitch - PITCH_DELTA) return "HEAD_UP";
+      if (noseX < baselineYaw - YAW_DELTA) return "HEAD_RIGHT";
+      if (noseX > baselineYaw + YAW_DELTA) return "HEAD_LEFT";
+      return "HEAD_CENTER";
+    }
+    
+    // Fallback if calibration failed (< 30 samples)
+    if (pitchRatio > 1.4) return "HEAD_DOWN";
+    if (pitchRatio < 0.7) return "HEAD_UP";
+    if (noseX < 0.40) return "HEAD_RIGHT";
+    if (noseX > 0.60) return "HEAD_LEFT";
+    return "HEAD_CENTER";
+  };
+
+  const GAZE_DELTA = 0.15;
+
+  const classifyGaze = (
+    gazeX: number, gazeY: number,
+    baselineGazeX: number | null, baselineGazeY: number | null
+  ): string => {
+    const bx = baselineGazeX !== null ? baselineGazeX : 0;
+    const by = baselineGazeY !== null ? baselineGazeY : 0;
+    
+    const dx = gazeX - bx;
+    const dy = gazeY - by;
+    
+    if (Math.abs(dx) > Math.abs(dy)) {
+      if (dx > GAZE_DELTA) return "gaze_right";
+      if (dx < -GAZE_DELTA) return "gaze_left";
+    } else {
+      if (dy > GAZE_DELTA) return "gaze_down";
+      if (dy < -GAZE_DELTA) return "gaze_up";
+    }
+    return "center";
+  };
+
+  // === SENSOR FUSION ===
+  const fuseSensors = (headPose: string, gazePose: string): string => {
+    // Case A: Both agree on center → clean center
+    if (headPose === "HEAD_CENTER" && gazePose === "center") return "HEAD_CENTER";
+    // Case B: Head deflects but eyes are centered → eyes veto (laptop tilt false positive)
+    if (headPose !== "HEAD_CENTER" && gazePose === "center") return "HEAD_CENTER";
+    // Case C: Eyes drift regardless of head pose → iris wins, this is the killer feature
+    if (gazePose !== "center") {
+      if (gazePose === "gaze_right") return "HEAD_RIGHT";
+      if (gazePose === "gaze_left") return "HEAD_LEFT";
+      if (gazePose === "gaze_up") return "HEAD_UP";
+      if (gazePose === "gaze_down") return "HEAD_DOWN";
+      return gazePose;
+    }
+    // Fallback
+    return headPose;
+  };
+
   // --- 2. MEDIAPIPE FACE MESH (30fps CPU Gatekeeper) ---
   const initGatekeeper = (videoEl: HTMLVideoElement) => {
     // @ts-ignore
@@ -125,7 +200,8 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
     faceMesh.onResults((results: any) => {
       let faces = 0;
       let talking = false;
-      let pose = "center";
+      let pose = "HEAD_CENTER";
+      let gazeVector = [0, 0];
 
       if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
         faces = results.multiFaceLandmarks.length;
@@ -164,17 +240,108 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
           noseX = (nose.x - leftEye.x) / dx;
         }
 
-        // Determine State
-        if (pitchRatio > 1.4) pose = "down";       // Chin compresses, forehead elongates
-        else if (pitchRatio < 0.7) pose = "up";    // Forehead compresses, chin elongates
-        else if (noseX < 0.40) pose = "right";     // Nose shifts heavily left on-screen
-        else if (noseX > 0.60) pose = "left";      // Nose shifts heavily right on-screen
+        // === IRIS MATH ===
+        const dist = (a: {x:number,y:number}, b: {x:number,y:number}) =>
+          Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
+
+        // Left Eye Nodes
+        const lIris = primary[468];
+        const lInner = primary[133];
+        const lOuter = primary[33];
+        const lTop = primary[159];
+        const lBottom = primary[145];
+
+        // Right Eye Nodes
+        const rIris = primary[473];
+        const rInner = primary[362];
+        const rOuter = primary[263];
+        const rTop = primary[386];
+        const rBottom = primary[374];
+
+        // Horizontal Gaze (Positive = Right, Negative = Left)
+        const lGazeX = (dist(lIris, lInner) - dist(lIris, lOuter)) / dist(lInner, lOuter);
+        const rGazeX = (dist(rIris, rInner) - dist(rIris, rOuter)) / dist(rInner, rOuter);
+        const currentGazeX = (lGazeX + rGazeX) / 2;
+
+        // Vertical Gaze (Positive = Down, Negative = Up)
+        const lGazeY = (dist(lIris, lTop) - dist(lIris, lBottom)) / dist(lTop, lBottom);
+        const rGazeY = (dist(rIris, rTop) - dist(rIris, rBottom)) / dist(rTop, rBottom);
+        const currentGazeY = (lGazeY + rGazeY) / 2;
+
+        // === CALIBRATION GAZE SAMPLES ===
+        if (calibrationRef.current.isCalibrating) {
+          if (faces === 1) {
+            calibrationRef.current.samples.push({ 
+              pitchRatio, 
+              noseX,
+              gazeX: currentGazeX,
+              gazeY: currentGazeY
+            });
+          }
+          
+          // Lock baseline after 5 seconds
+          if (Date.now() - calibrationRef.current.startTime > 5000) {
+            const samples = calibrationRef.current.samples;
+            if (samples.length >= 30) {
+              const meanPitch = samples.reduce((acc, s) => acc + s.pitchRatio, 0) / samples.length;
+              const meanYaw = samples.reduce((acc, s) => acc + s.noseX, 0) / samples.length;
+              const meanGazeX = samples.reduce((acc, s) => acc + s.gazeX, 0) / samples.length;
+              const meanGazeY = samples.reduce((acc, s) => acc + s.gazeY, 0) / samples.length;
+
+              calibrationRef.current.baselinePitch = meanPitch;
+              calibrationRef.current.baselineYaw = meanYaw;
+              calibrationRef.current.baselineGazeX = meanGazeX;
+              calibrationRef.current.baselineGazeY = meanGazeY;
+              
+              console.log(`[CALIBRATION] Baseline Locked -> Pitch: ${meanPitch.toFixed(2)}, Yaw: ${meanYaw.toFixed(2)}, GazeX: ${meanGazeX.toFixed(2)}, GazeY: ${meanGazeY.toFixed(2)}`);
+            } else {
+              console.warn(`[CALIBRATION] Failed to lock baseline. Only ${samples.length} valid samples collected. Falling back to hardcoded heuristics.`);
+            }
+            calibrationRef.current.isCalibrating = false;
+            setIsCalibrating(false);
+          }
+        }
+
+        // Determine Head Pose
+        const headPose = classifyPose(pitchRatio, noseX, calibrationRef.current.baselinePitch, calibrationRef.current.baselineYaw);
+        
+        // Determine Gaze Pose
+        const gazePose = classifyGaze(currentGazeX, currentGazeY, calibrationRef.current.baselineGazeX, calibrationRef.current.baselineGazeY);
+
+        // Fuse Sensors
+        pose = fuseSensors(headPose, gazePose);
+        gazeVector = [currentGazeX, currentGazeY];
+
+        // --- 4. Draw Overlay ---
+        if (overlayRef.current && videoRef.current) {
+          const canvas = overlayRef.current;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            if (canvas.width !== videoRef.current.videoWidth) {
+              canvas.width = videoRef.current.videoWidth;
+              canvas.height = videoRef.current.videoHeight;
+            }
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.fillStyle = "#00FF9C"; // Cyber Green Gaze
+            ctx.beginPath();
+            ctx.arc(lIris.x * canvas.width, lIris.y * canvas.height, 2, 0, 2 * Math.PI);
+            ctx.arc(rIris.x * canvas.width, rIris.y * canvas.height, 2, 0, 2 * Math.PI);
+            ctx.fill();
+          }
+        }
+      } else {
+        if (overlayRef.current) {
+          const ctx = overlayRef.current.getContext("2d");
+          if (ctx) ctx.clearRect(0, 0, overlayRef.current.width, overlayRef.current.height);
+        }
       }
 
       telemetryRef.current = {
         faces_detected: faces,
         is_talking: talking,
-        head_pose: pose
+        head_pose: pose,
+        gaze_vector: gazeVector
       };
     });
 
@@ -228,7 +395,20 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
       }
       setIsScanning(true);
       setSysStatus("ACTIVE");
-      setLatestVerdict("OPTICS ONLINE. ANALYZING BEHAVIOR...");
+      
+      // Reset Calibration State on start
+      calibrationRef.current = {
+        isCalibrating: true,
+        samples: [],
+        baselinePitch: null,
+        baselineYaw: null,
+        baselineGazeX: null,
+        baselineGazeY: null,
+        startTime: Date.now()
+      };
+      setIsCalibrating(true);
+      
+      setLatestVerdict("OPTICS ONLINE. CALIBRATING BASELINE...");
 
       if (videoRef.current && !gatekeeperRef.current && isFaceMeshReady) {
          // Start the 30fps Gatekeeper
@@ -263,6 +443,17 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
         setViolationCount(0);
         setInterventionLevel("CLEAR");
         setLatestVerdict("SYSTEM STANDBY");
+        // Reset calibration on manual clear
+        calibrationRef.current = {
+          isCalibrating: true,
+          samples: [],
+          baselinePitch: null,
+          baselineYaw: null,
+          baselineGazeX: null,
+          baselineGazeY: null,
+          startTime: Date.now()
+        };
+        setIsCalibrating(true);
         showToast("MEMORY CLEARED SUCCESSFULLY.", "success");
         console.log("Memory reset successfully.");
         // Ensure parent component un-flags warning too
@@ -332,8 +523,15 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
       console.log("🚀 [FRONTEND] OUTGOING PAYLOAD:", {
         faces_detected: telemetryRef.current.faces_detected,
         is_talking: telemetryRef.current.is_talking,
-        head_pose: telemetryRef.current.head_pose
+        head_pose: telemetryRef.current.head_pose,
+        gaze_vector: telemetryRef.current.gaze_vector
       });
+
+      if (calibrationRef.current.isCalibrating) {
+        // Skip payload POST and wait for baseline lock
+        if (loopRunningRef.current) loopTimerRef.current = setTimeout(runInferenceLoop, 5000);
+        return;
+      }
 
       try {
         const response = await fetch("http://localhost:8080/api/v1/analyze-frame", {
@@ -345,7 +543,8 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
             image_base64: base64Image,
             faces_detected: telemetryRef.current.faces_detected,
             is_talking: telemetryRef.current.is_talking,
-            head_pose: telemetryRef.current.head_pose
+            head_pose: telemetryRef.current.head_pose,
+            gaze_vector: telemetryRef.current.gaze_vector
           })
         });
 
@@ -456,6 +655,27 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
           muted
           className="w-full h-full object-cover"
         />
+
+        <canvas
+          ref={overlayRef}
+          className="absolute inset-0 w-full h-full pointer-events-none object-cover"
+        />
+
+        {/* Calibration Overlay */}
+        {isScanning && isCalibrating && (
+          <div className="absolute inset-0 dot-grid flex items-center justify-center text-center p-6 bg-[var(--color-surface)]/60 backdrop-blur-sm z-10 transition-opacity">
+            <div className="terminal-slab w-full max-w-[430px] p-4 text-center haze">
+              <span className="flex items-center justify-center gap-2 mb-3">
+                <span className="w-2 h-2 rounded-full bg-[var(--color-signal)] pulse-signal" />
+                <span className="eyebrow text-[var(--color-signal)]">Zero-Hour Calibration</span>
+              </span>
+              <div className="font-mono text-[13px] leading-relaxed text-[var(--color-slate)]">
+                Calibrating Posture Baseline...<br/>
+                Please look naturally at the screen.
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Idle-state placeholder grid (only when no stream) */}
         {!isScanning && (
@@ -587,7 +807,7 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
           </div>
         </div>
 
-        {/* VLM inference log */}
+        {/* Behavioral Log */}
         <div className="lift-1 rounded-lg p-5 flex flex-col min-h-[120px]">
           <span className="eyebrow mb-3 flex items-center gap-2">
             <span
@@ -595,7 +815,7 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
                 sysStatus === "ACTIVE" ? "bg-[var(--color-signal)] pulse-signal" : "bg-[var(--color-fog)]"
               }`}
             />
-            VLM inference log
+            Behavioral Log
           </span>
           <p
             className={`font-mono text-[12px] leading-relaxed ${
