@@ -1,0 +1,187 @@
+{
+  ".kilo/agent-manager.json": {
+    "mtime": 1777825218.631053,
+    "ast_hash": "b8118f0c6932f55baa5434dda4dfa8b7",
+    "semantic_hash": ""
+  },
+  ".kilo/package.json": {
+    "mtime": 1777825294.178398,
+    "ast_hash": "46578782385949feef7000ccd251cf33",
+    "semantic_hash": ""
+  },
+  ".vscode/settings.json": {
+    "mtime": 1777049571.2491188,
+    "ast_hash": "17d938a3ca88c66eaaff04053353334e",
+    "semantic_hash": ""
+  },
+  "backend/core_memory/bea.py": {
+    "mtime": 1777821990.4023333,
+    "ast_hash": "65109a0b059123f0356f8946e2e9a818",
+    "semantic_hash": ""
+  },
+  "backend/edge_main.py": {
+    "mtime": 1777824819.9974217,
+    "ast_hash": "4c2c66131b395e4de4eb68d26e7e7d43",
+    "semantic_hash": ""
+  },
+  "backend/voice_engine.py": {
+    "mtime": 1777821990.4041202,
+    "ast_hash": "2079d3835dedf5deee995eb029e06f97",
+    "semantic_hash": ""
+  },
+  "frontend/eslint.config.mjs": {
+    "mtime": 1777049571.3346171,
+    "ast_hash": "6c4307ffa009658f5c97f5629094c0c2",
+    "semantic_hash": ""
+  },
+  "frontend/next-env.d.ts": {
+    "mtime": 1777824965.113811,
+    "ast_hash": "29f60a376e12bf72b67d4994fcc84214",
+    "semantic_hash": ""
+  },
+  "frontend/next.config.ts": {
+    "mtime": 1777830208.1937232,
+    "ast_hash": "daad32b4de0b92afe04301ebf0a6cc76",
+    "semantic_hash": ""
+  },
+  "frontend/package.json": {
+    "mtime": 1781530963.9709258,
+    "ast_hash": "a44e1c2caf54905281a344e548780e35",
+    "semantic_hash": ""
+  },
+  "frontend/postcss.config.mjs": {
+    "mtime": 1777049571.3366194,
+    "ast_hash": "481fac0fdecd70e1821cc30b86030c1a",
+    "semantic_hash": ""
+  },
+  "frontend/scripts/copy-mediapipe.mjs": {
+    "mtime": 1777818695.9157922,
+    "ast_hash": "2028739f7898c6866452220ad3565404",
+    "semantic_hash": ""
+  },
+  "frontend/src/app/autopsy/page.tsx": {
+    "mtime": 1777826920.046686,
+    "ast_hash": "49425690e84028a6864ee5033012ec75",
+    "semantic_hash": ""
+  },
+  "frontend/src/app/layout.tsx": {
+    "mtime": 1777821990.4041202,
+    "ast_hash": "d0a89fbd2a5d04fa8567c7d4f4f8956a",
+    "semantic_hash": ""
+  },
+  "frontend/src/app/page.tsx": {
+    "mtime": 1777829202.3699546,
+    "ast_hash": "d7733c7785b1218758c7d400153e3715",
+    "semantic_hash": ""
+  },
+  "frontend/src/app/verdict/page.tsx": {
+    "mtime": 1777826678.473164,
+    "ast_hash": "2d3d7e8b317f336fd95e384089be2531",
+    "semantic_hash": ""
+  },
+  "frontend/src/components/AuditTrail.tsx": {
+    "mtime": 1777826889.935847,
+    "ast_hash": "da959be24e732601f434442cf4f0e85d",
+    "semantic_hash": ""
+  },
+  "frontend/src/components/LoadingOverlay.tsx": {
+    "mtime": 1777829269.8555539,
+    "ast_hash": "e9a077ed701c838a11ebb111b351b318",
+    "semantic_hash": ""
+  },
+  "frontend/src/components/SniperScope.tsx": {
+    "mtime": 1777829226.923063,
+    "ast_hash": "2696b93b93e4c04279050d6f012296b5",
+    "semantic_hash": ""
+  },
+  "frontend/src/components/ViolationCard.tsx": {
+    "mtime": 1777826665.9377167,
+    "ast_hash": "1d1c953fbf76ea4a51282d38dec8983a",
+    "semantic_hash": ""
+  },
+  "frontend/src/components/VoiceOrb.tsx": {
+    "mtime": 1777829249.0368705,
+    "ast_hash": "b8f750c4c74e488783e28a70c96b1764",
+    "semantic_hash": ""
+  },
+  "frontend/src/lib/violation-templates.ts": {
+    "mtime": 1777824335.4833698,
+    "ast_hash": "3b29f8e7cbe94a1b2ff24ec0f691aac3",
+    "semantic_hash": ""
+  },
+  "frontend/tsconfig.json": {
+    "mtime": 1777049571.3399777,
+    "ast_hash": "0a2f4ed9289b65cd3feb4fb4ab3a4fcd",
+    "semantic_hash": ""
+  },
+  "package.json": {
+    "mtime": 1777049571.3399777,
+    "ast_hash": "4e42fe0f6fe4407d0442a6470f482433",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1777821990.4023333,
+    "ast_hash": "a4d7aaecb57cd1adb720196d5b1b0052",
+    "semantic_hash": ""
+  },
+  "ai-context.yaml": {
+    "mtime": 1777298800.1207416,
+    "ast_hash": "ce48660229041ae052e88e663194e322",
+    "semantic_hash": ""
+  },
+  "docker-compose.yml": {
+    "mtime": 1777298866.338219,
+    "ast_hash": "f9bedfe652d2747c8a9028c855cf9308",
+    "semantic_hash": ""
+  },
+  "frontend/README.md": {
+    "mtime": 1777049571.3346171,
+    "ast_hash": "9162add00befbcdb432430f405c4ad8d",
+    "semantic_hash": ""
+  },
+  "frontend/pnpm-workspace.yaml": {
+    "mtime": 1777049571.335617,
+    "ast_hash": "b6e0a9c1a7b488c11a1c5812b4ed319b",
+    "semantic_hash": ""
+  },
+  "requirements.txt": {
+    "mtime": 1777298732.6865957,
+    "ast_hash": "19b876446faa7ed2f42d6ec5e4f909d5",
+    "semantic_hash": ""
+  },
+  "system-context.yaml": {
+    "mtime": 1777298750.240789,
+    "ast_hash": "68fc954580c80b48d833df6bc68f8748",
+    "semantic_hash": ""
+  },
+  "temp.txt": {
+    "mtime": 1777298645.5263753,
+    "ast_hash": "7e2767c033099ab95ac919e044649b71",
+    "semantic_hash": ""
+  },
+  "frontend/public/file.svg": {
+    "mtime": 1777049571.3366194,
+    "ast_hash": "d09f95206c3fa0bb9bd9fefabfd0ea71",
+    "semantic_hash": ""
+  },
+  "frontend/public/globe.svg": {
+    "mtime": 1777049571.3366194,
+    "ast_hash": "2aaafa6a49b6563925fe440891e32717",
+    "semantic_hash": ""
+  },
+  "frontend/public/next.svg": {
+    "mtime": 1777049571.3366194,
+    "ast_hash": "8e061864f388b47f33a1c3780831193e",
+    "semantic_hash": ""
+  },
+  "frontend/public/vercel.svg": {
+    "mtime": 1777049571.3366194,
+    "ast_hash": "c0af2f507b369b085b35ef4bbe3bcf1e",
+    "semantic_hash": ""
+  },
+  "frontend/public/window.svg": {
+    "mtime": 1777049571.3376174,
+    "ast_hash": "a2760511c65806022ad20adf74370ff3",
+    "semantic_hash": ""
+  }
+}
