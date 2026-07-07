@@ -1,15 +1,6 @@
 <div align="center">
 
-<pre>
- ██████╗ ██╗   ██╗ █████╗ ██████╗ ██████╗
-██╔════╝ ██║   ██║██╔══██╗██╔══██╗██╔══██╗
-██║  ███╗██║   ██║███████║██████╔╝██║  ██║
-██║   ██║██║   ██║██╔══██║██╔══██╗██║  ██║
-╚██████╔╝╚██████╔╝██║  ██║██║  ██║██████╔╝
- ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝
-</pre>
-
-### **Guardianship Utilizing AI for Real-time Detection**
+![G.U.A.R.D. Banner](https://capsule-render.vercel.app/api?type=waving&color=0,0d1117,00ff9c&height=200&section=header&text=G.U.A.R.D.&fontSize=80&fontColor=00ff9c&fontAlignY=38&desc=Guardianship%20Utilizing%20AI%20for%20Real-time%20Detection&descAlignY=58&descSize=16&descColor=a3a3a3&animation=fadeIn)
 
 **Your AI interview coach. Decode the black box — before the real interview does it to you.**
 
@@ -216,7 +207,7 @@ This is the moat. The models are open — the behavioral judgment layer is the p
 
 ## 🧰 Tech Stack
 
-**Backend:** FastAPI · Uvicorn · Ultralytics YOLOv8s · OpenCV · SQLite (WAL) · Ollama / NVIDIA NIM · pypdf
+**Backend:** FastAPI · Uvicorn · Ultralytics YOLOv8s · OpenCV · SQLite (WAL) · Ollama / NVIDIA NIM · pypdf  
 **Frontend:** Next.js 16 · TypeScript · Tailwind v4 · MediaPipe Tasks (WASM) · Framer Motion · Web Speech API
 
 ---
@@ -226,6 +217,8 @@ This is the moat. The models are open — the behavioral judgment layer is the p
 MIT — practice hard, own your data.
 
 <div align="center">
+
+![Footer](https://capsule-render.vercel.app/api?type=waving&color=0,00ff9c,0d1117&height=120&section=footer)
 
 *Built for everyone who ever got a rejection email and wondered what the camera saw.*
 
