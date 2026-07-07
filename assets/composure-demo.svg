@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 190" width="860" height="190">
+  <style>
+    .lbl { font: 600 12px 'Consolas', monospace; fill: #737373; }
+    .line { stroke-dasharray: 1200; stroke-dashoffset: 1200; animation: draw 5s ease-out forwards infinite; }
+    @keyframes draw { 0% { stroke-dashoffset: 1200 } 70%,100% { stroke-dashoffset: 0 } }
+    .dot { opacity: 0; animation: pop .4s ease-out forwards; }
+    @keyframes pop { to { opacity: 1 } }
+  </style>
+  <rect width="860" height="190" rx="14" fill="#0a0a0a" stroke="#262626"/>
+  <text x="24" y="30" class="lbl" fill="#34d399">COMPOSURE CURVE — SESSION REPLAY</text>
+  <line x1="24" x2="836" y1="70" y2="70" stroke="#1f1f1f" stroke-dasharray="4 6"/>
+  <line x1="24" x2="836" y1="110" y2="110" stroke="#1f1f1f" stroke-dasharray="4 6"/>
+  <path class="line" d="M24,60 C90,55 130,58 180,62 C230,66 260,72 310,95
+    C350,113 380,138 430,142 C470,145 500,120 550,95 C600,72 640,64 700,60 C760,57 800,58 836,56"
+    fill="none" stroke="#34d399" stroke-width="2.5" stroke-linejoin="round"/>
+  <circle class="dot" style="animation-delay:1.2s" cx="310" cy="95" r="6" fill="#38bdf8"/>
+  <text class="lbl dot" style="animation-delay:1.2s" x="310" y="82" text-anchor="middle" fill="#38bdf8">QUESTION</text>
+  <circle class="dot" style="animation-delay:2.4s" cx="430" cy="142" r="6" fill="#f43f5e"/>
+  <text class="lbl dot" style="animation-delay:2.4s" x="430" y="165" text-anchor="middle" fill="#f43f5e">DIP</text>
+  <circle class="dot" style="animation-delay:3s" cx="470" cy="138" r="6" fill="#a78bfa"/>
+  <text class="lbl dot" style="animation-delay:3s" x="470" y="126" text-anchor="middle" fill="#a78bfa">NUDGE</text>
+  <circle class="dot" style="animation-delay:3.8s" cx="550" cy="95" r="6" fill="#34d399"/>
+  <text class="lbl dot" style="animation-delay:3.8s" x="550" y="82" text-anchor="middle" fill="#34d399">RECOVERY</text>
+</svg>
