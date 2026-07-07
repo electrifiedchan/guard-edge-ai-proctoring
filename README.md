@@ -1,6 +1,6 @@
 <div align="center">
 
-![G.U.A.R.D. Banner](https://capsule-render.vercel.app/api?type=waving&color=0,0d1117,00ff9c&height=200&section=header&text=G.U.A.R.D.&fontSize=80&fontColor=00ff9c&fontAlignY=38&desc=Guardianship%20Utilizing%20AI%20for%20Real-time%20Detection&descAlignY=58&descSize=16&descColor=a3a3a3&animation=fadeIn)
+![G.U.A.R.D. Banner](https://capsule-render.vercel.app/api?type=waving&color=0,0d1117,00ff9c&height=200&section=header&text=G.U.A.R.D.&fontSize=80&fontColor=00ff9c&fontAlignY=38&desc=Guided%20User%20Assessment%20%26%20Resume%20Defense&descAlignY=58&descSize=16&descColor=a3a3a3&animation=fadeIn)
 
 **Your AI interview coach. Decode the black box — before the real interview does it to you.**
 
