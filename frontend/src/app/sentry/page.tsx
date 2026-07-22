@@ -1,0 +1,442 @@
+"use client";
+
+import { useState, useCallback, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
+import { motion, AnimatePresence } from "framer-motion";
+import { Square, User, Bot, Shield } from "lucide-react";
+import SniperScope, { RiskPacket, SniperScopeHandle } from "@/components/SniperScope";
+import VoiceOrb, { VoiceState } from "@/components/VoiceOrb";
+import LoadingOverlay from "@/components/LoadingOverlay";
+import { useVAD } from "@/hooks/useVAD";
+
+type ChatMessage = {
+  role: "interviewer" | "candidate";
+  content: string;
+  persona?: string;
+};
+
+type TurnState = "ai-speaking" | "listening" | "processing" | "idle";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8080";
+
+const PERSONA_LABELS: Record<string, { label: string; color: string }> = {
+  friendly_hr: { label: "Friendly HR", color: "text-emerald-400" },
+  curious_peer: { label: "Curious Peer", color: "text-sky-400" },
+  skeptical_tech_lead: { label: "Tech Lead", color: "text-amber-400" },
+};
+
+export default function SentryPage() {
+  const router = useRouter();
+  const sniperRef = useRef<SniperScopeHandle>(null);
+
+  // Interview state — starts after sentry is engaged
+  const [interviewActive, setInterviewActive] = useState(false);
+  const [sessionId, setSessionId] = useState("");
+  const sessionIdRef = useRef("");
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [currentPersona, setCurrentPersona] = useState("friendly_hr");
+  const [turnState, setTurnState] = useState<TurnState>("idle");
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [error, setError] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  // Transcript (before interview starts, shows system status)
+  const [liveTranscript, setLiveTranscript] = useState("SYSTEM STANDBY. UPLOAD COMPLETE. ENGAGE SENTRY TO BEGIN.");
+
+  // Vision telemetry from SniperScope
+  const [riskScore, setRiskScore] = useState(0);
+  const riskScoreRef = useRef(0);
+  const [interventionLevel, setInterventionLevel] = useState("CLEAR");
+
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const interviewStartedRef = useRef(false);
+
+  // VAD hook
+  const { isVoiceActive, audioLevel, startListening, stopListening } = useVAD({
+    silenceThresholdMs: 2500,
+    volumeThreshold: 0.01,
+    onSpeechEnd: handleSpeechEnd,
+  });
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatHistory]);
+
+  // Redirect if no session data
+  useEffect(() => {
+    const sessionData = sessionStorage.getItem("guard_session");
+    if (!sessionData) {
+      router.push("/");
+    }
+  }, [router]);
+
+  // Map turnState → VoiceOrb visual state
+  const orbState: VoiceState =
+    turnState === "ai-speaking" ? "SPEAK" :
+    turnState === "listening" ? "LISTEN" :
+    turnState === "processing" ? "PROCESS" :
+    "IDLE";
+
+  // TTS
+  const speakText = useCallback((text: string): Promise<void> => {
+    return new Promise((resolve) => {
+      if (!("speechSynthesis" in window)) { resolve(); return; }
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 0.92;
+      utterance.pitch = 0.85;
+      const voices = window.speechSynthesis.getVoices();
+      const preferred =
+        voices.find(
+          (v) =>
+            v.lang.startsWith("en") &&
+            /\b(male|david|james|guy|mark|daniel|richard)\b/i.test(v.name)
+        ) ||
+        voices.find(
+          (v) => v.lang.startsWith("en") && v.name.toLowerCase().includes("natural")
+        ) ||
+        voices.find((v) => v.lang.startsWith("en"));
+      if (preferred) utterance.voice = preferred;
+      utterance.onend = () => { resolve(); };
+      utterance.onerror = () => { resolve(); };
+      window.speechSynthesis.speak(utterance);
+    });
+  }, []);
+
+  // When user clicks "Disengage" in SniperScope — stop everything
+  const handleDisengage = useCallback(() => {
+    stopListening();
+    window.speechSynthesis?.cancel();
+    setInterviewActive(false);
+    setTurnState("idle");
+    interviewStartedRef.current = false;
+    setLiveTranscript("SENTRY DISENGAGED. PRESS ENGAGE TO RESUME.");
+    setChatHistory([]);
+  }, [stopListening]);
+
+  // SniperScope telemetry — first callback means sentry is live → start interview
+  const handleTelemetry = useCallback((packet: RiskPacket, verdict: string) => {
+    setRiskScore(packet.risk_score);
+    riskScoreRef.current = packet.risk_score;
+    setInterventionLevel(packet.intervention_level);
+
+    if (!interviewStartedRef.current) {
+      interviewStartedRef.current = true;
+      setLiveTranscript("SENTRY ENGAGED. INITIATING INTERVIEW SEQUENCE…");
+      startInterviewFlow();
+    }
+  }, []);
+
+  // Start conversational interview
+  const startInterviewFlow = useCallback(async () => {
+    const sessionData = sessionStorage.getItem("guard_session");
+    if (!sessionData) return;
+
+    const { questions, resume_text } = JSON.parse(sessionData);
+    setInterviewActive(true);
+    setChatHistory([]);
+    setTurnState("processing");
+    setLiveTranscript("CONNECTING TO AI INTERVIEWER…");
+
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/interview/start-session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resume_text, questions }),
+      });
+
+      if (!res.ok) throw new Error("Failed to start session");
+      const data = await res.json();
+
+      setSessionId(data.session_id);
+      sessionIdRef.current = data.session_id;
+      setCurrentPersona(data.persona);
+      setChatHistory([{ role: "interviewer", content: data.opening_message, persona: data.persona }]);
+
+      setTurnState("ai-speaking");
+      setLiveTranscript(`AI: ${data.opening_message}`);
+      await speakText(data.opening_message);
+
+      setTurnState("listening");
+      setLiveTranscript("MICROPHONE LIVE. LISTENING…");
+      startListening();
+    } catch (err) {
+      console.error("Session start failed:", err);
+      setError("Failed to start interview session. Check backend.");
+      setLiveTranscript("ERROR: BACKEND UNREACHABLE.");
+    }
+  }, [speakText, startListening]);
+
+  // VAD speech end
+  async function handleSpeechEnd(blob: Blob) {
+    setTurnState("processing");
+    setIsTranscribing(true);
+    setLiveTranscript("TRANSCRIBING AUDIO…");
+
+    try {
+      const formData = new FormData();
+      formData.append("file", blob, "recording.webm");
+      const transcribeRes = await fetch(`${API_BASE}/api/v1/voice/transcribe`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!transcribeRes.ok) {
+        const detail = await transcribeRes.json().catch(() => null);
+        throw new Error(detail?.detail || `Transcription failed (${transcribeRes.status})`);
+      }
+      const { transcript } = await transcribeRes.json();
+      setIsTranscribing(false);
+
+      if (!transcript || transcript.trim().length === 0) {
+        setTurnState("listening");
+        setLiveTranscript("MICROPHONE LIVE. LISTENING…");
+        startListening();
+        return;
+      }
+
+      setChatHistory((prev) => [...prev, { role: "candidate", content: transcript }]);
+      setLiveTranscript(`CANDIDATE: "${transcript}"`);
+
+      const turnRes = await fetch(`${API_BASE}/api/v1/interview/conversation-turn`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionIdRef.current,
+          transcript,
+          focus_score: 100 - riskScoreRef.current,
+        }),
+      });
+
+      if (!turnRes.ok) {
+        const detail = await turnRes.json().catch(() => null);
+        throw new Error(detail?.detail || `Conversation turn failed (${turnRes.status})`);
+      }
+      const turnData = await turnRes.json();
+
+      setCurrentPersona(turnData.persona);
+      setChatHistory((prev) => [...prev, {
+        role: "interviewer",
+        content: turnData.response,
+        persona: turnData.persona,
+      }]);
+
+      if (turnData.is_complete) {
+        setTurnState("ai-speaking");
+        setLiveTranscript(`AI: ${turnData.response}`);
+        await speakText(turnData.response);
+        await endSession();
+        return;
+      }
+
+      setTurnState("ai-speaking");
+      setLiveTranscript(`AI: ${turnData.response}`);
+      await speakText(turnData.response);
+      setTurnState("listening");
+      setLiveTranscript("MICROPHONE LIVE. LISTENING…");
+      startListening();
+
+    } catch (err) {
+      console.error("Turn processing error:", err);
+      setError(err instanceof Error ? err.message : "Something went wrong");
+      setIsTranscribing(false);
+      setTurnState("listening");
+      setLiveTranscript("ERROR. RESUMING LISTEN…");
+      startListening();
+    }
+  }
+
+  // End session → navigate to report
+  const endSession = useCallback(async () => {
+    setIsGenerating(true);
+    stopListening();
+    window.speechSynthesis?.cancel();
+    sniperRef.current?.stopCamera();
+    setLiveTranscript("GENERATING PERFORMANCE REPORT…");
+
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/interview/end-session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionIdRef.current }),
+      });
+
+      if (!res.ok) throw new Error("Verdict generation failed");
+      const data = await res.json();
+
+      sessionStorage.setItem(
+        "guard_report",
+        JSON.stringify({
+          report: data.report,
+          average_focus_score: Math.round(data.average_focus_score || 0),
+          turns_completed: data.turns_completed || 0,
+        })
+      );
+
+      router.push("/report");
+    } catch (err) {
+      console.error("End session error:", err);
+      setError(err instanceof Error ? err.message : "Failed to generate report");
+      setIsGenerating(false);
+      setLiveTranscript("ERROR: REPORT GENERATION FAILED.");
+    }
+  }, [stopListening, router]);
+
+  return (
+    <main className="h-screen bg-[var(--color-canvas)] flex flex-col px-5 md:px-8 py-5 text-[var(--color-parchment)] items-center overflow-hidden">
+      {/* Top bar */}
+      <header className="w-full max-w-[1400px] mb-4 flex justify-between items-center border-b border-[var(--color-hairline)] pb-4">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg lift-2 flex items-center justify-center">
+            <span className="w-2 h-2 rounded-full bg-[var(--color-signal)] glow-pulse" />
+          </div>
+          <div className="flex flex-col">
+            <h1 className="font-display text-[18px] font-semibold tracking-tight text-[var(--color-snow)] leading-none">
+              GUARD
+            </h1>
+            <span className="eyebrow mt-1.5">Edge-AI Proctoring</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <span className="hidden md:inline-flex items-center gap-2 px-2.5 py-1 rounded-md text-[11px] font-medium border border-[var(--color-hairline)] bg-[var(--color-surface)] text-[var(--color-slate)]">
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-signal)] pulse-signal" />
+            Local · 127.0.0.1
+          </span>
+
+          {interviewActive && (
+            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-medium uppercase border border-[var(--color-hairline)] bg-[var(--color-surface)] ${
+              PERSONA_LABELS[currentPersona]?.color || "text-[var(--color-slate)]"
+            }`}>
+              <Bot size={10} />
+              {PERSONA_LABELS[currentPersona]?.label || "Interviewer"}
+            </span>
+          )}
+
+          <button
+            onClick={() => endSession()}
+            disabled={isGenerating || !interviewActive}
+            className="h-9 px-4 rounded-md bg-[var(--color-signal)] text-[var(--color-canvas)] text-[12px] font-semibold hover:bg-[var(--color-iris-hover)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+          >
+            {isGenerating ? "Analyzing…" : "End session · generate report"}
+          </button>
+        </div>
+      </header>
+
+      {/* Dashboard grid */}
+      <div className="w-full max-w-[1400px] flex flex-col xl:flex-row gap-4 flex-1 min-h-0">
+        {/* Vision Sentry (left) */}
+        <div className="flex-1 min-h-0 min-w-0">
+          <SniperScope ref={sniperRef} onTelemetryUpdate={handleTelemetry} onDisengage={handleDisengage} />
+        </div>
+
+        {/* Right sidebar — VoiceOrb + Transcript/Chat */}
+        <div className="flex-shrink-0 flex flex-col gap-3 w-full xl:w-[420px] h-full overflow-hidden">
+          {/* VoiceOrb — driven by interview turn state */}
+          <VoiceOrb externalState={orbState} />
+
+          {/* Live transcript / Chat panel */}
+          <div className="lift-1 rounded-lg p-4 flex flex-col flex-1 min-h-0 relative overflow-hidden">
+            <div
+              className={`absolute top-0 left-0 w-full h-px transition-colors duration-300 ${
+                turnState === "listening" || isTranscribing ? "bg-[var(--color-signal)]" : "bg-[var(--color-hairline)]"
+              }`}
+            />
+            <span className="eyebrow mb-3 flex items-center gap-2">
+              <span
+                className={`w-1.5 h-1.5 rounded-full transition-colors ${
+                  interviewActive ? "bg-[var(--color-signal)] pulse-signal" : "bg-[var(--color-fog)]"
+                }`}
+              />
+              {interviewActive ? "Interview transcript" : "Voice transcript"}
+            </span>
+
+            {/* Before interview: simple transcript line */}
+            {!interviewActive && (
+              <p className="text-[12.5px] leading-relaxed font-mono text-[var(--color-parchment)]">
+                <span className="text-[var(--color-fog)] mr-2">&gt;</span>
+                {liveTranscript}
+              </p>
+            )}
+
+            {/* During interview: chat messages */}
+            {interviewActive && (
+              <div className="flex-1 overflow-y-auto space-y-3">
+                {chatHistory.map((msg, i) => (
+                  <motion.div
+                    key={i}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className={`flex gap-2 ${msg.role === "candidate" ? "flex-row-reverse" : ""}`}
+                  >
+                    <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${
+                      msg.role === "interviewer"
+                        ? "bg-[var(--color-signal-soft)] text-[var(--color-signal)]"
+                        : "bg-sky-500/10 text-sky-400"
+                    }`}>
+                      {msg.role === "interviewer" ? <Bot size={11} /> : <User size={11} />}
+                    </div>
+                    <div className={`max-w-[80%] rounded-lg px-3 py-2 text-[12px] leading-relaxed ${
+                      msg.role === "interviewer"
+                        ? "bg-neutral-900 text-[var(--color-snow)] border border-[var(--color-hairline)]"
+                        : "bg-sky-500/10 text-sky-100 border border-sky-500/20"
+                    }`}>
+                      {msg.content}
+                    </div>
+                  </motion.div>
+                ))}
+
+                {(isTranscribing || turnState === "processing") && (
+                  <div className="flex items-center gap-2 text-[var(--color-slate)]">
+                    <div className="flex gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-signal)] animate-bounce" style={{ animationDelay: "0ms" }} />
+                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-signal)] animate-bounce" style={{ animationDelay: "150ms" }} />
+                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-signal)] animate-bounce" style={{ animationDelay: "300ms" }} />
+                    </div>
+                    <span className="text-[10px] uppercase tracking-wider">
+                      {isTranscribing ? "Transcribing…" : "Generating response…"}
+                    </span>
+                  </div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+            )}
+          </div>
+
+          {/* Audio level indicator during listening */}
+          {turnState === "listening" && (
+            <div className="lift-1 rounded-lg px-5 py-3 flex items-center justify-center gap-3">
+              <div className="flex items-center gap-1 h-6">
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <motion.div
+                    key={i}
+                    className="w-1 rounded-full bg-[var(--color-signal)]"
+                    animate={{
+                      height: isVoiceActive
+                        ? `${Math.max(4, audioLevel * 24 * (0.5 + Math.random() * 0.5))}px`
+                        : "4px",
+                    }}
+                    transition={{ duration: 0.1 }}
+                  />
+                ))}
+              </div>
+              <span className="text-[10px] text-[var(--color-slate)] uppercase tracking-wider">
+                {isVoiceActive ? "Speaking detected" : "Waiting for voice…"}
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Error toast */}
+      {error && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-2 rounded-lg text-sm z-50">
+          {error}
+        </div>
+      )}
+
+      {/* Loading overlay while generating report */}
+      <LoadingOverlay open={isGenerating} />
+    </main>
+  );
+}

@@ -1,215 +1,274 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import SniperScope, { RiskPacket, SniperScopeHandle } from "@/components/SniperScope";
-import VoiceOrb from "@/components/VoiceOrb";
-import AuditTrail from "@/components/AuditTrail";
-import LoadingOverlay from "@/components/LoadingOverlay";
+import { motion } from "framer-motion";
+import { Upload, FileText, ChevronRight, Shield } from "lucide-react";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8080";
 
-export default function Home() {
+const LOADING_MESSAGES = [
+  "Parsing resume sections…",
+  "Identifying key accomplishments…",
+  "Mapping to STAR competencies…",
+  "Generating behavioral questions…",
+];
+
+async function hashFile(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function getCachedResult(hash: string) {
+  try {
+    const cached = localStorage.getItem(`guard_resume_cache_${hash}`);
+    if (!cached) return null;
+    const parsed = JSON.parse(cached);
+    // Expire after 24h
+    if (Date.now() - parsed.timestamp > 24 * 60 * 60 * 1000) {
+      localStorage.removeItem(`guard_resume_cache_${hash}`);
+      return null;
+    }
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+function setCachedResult(hash: string, data: { questions: string[]; resume_text: string }) {
+  try {
+    localStorage.setItem(
+      `guard_resume_cache_${hash}`,
+      JSON.stringify({ data, timestamp: Date.now() })
+    );
+  } catch {
+    // localStorage full — ignore
+  }
+}
+
+export default function UploadPage() {
   const router = useRouter();
-  const sniperRef = useRef<SniperScopeHandle>(null);
-  const [sessionStartTime] = useState<number>(Date.now());
-  const [hasWarned, setHasWarned] = useState(false);
-  const [liveTranscript, setLiveTranscript] = useState("SYSTEM STANDBY. WAITING FOR TRIGGER.");
-  const [isTranscribing, setIsTranscribing] = useState(false);
-  
-  const [latestRisk, setLatestRisk] = useState<RiskPacket | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [phase, setPhase] = useState<"idle" | "loading">("idle");
+  const [fileName, setFileName] = useState("");
+  const [dragOver, setDragOver] = useState(false);
+  const [error, setError] = useState("");
+  const [loadingStep, setLoadingStep] = useState(0);
 
-  // Receives live transcripts from VoiceOrb's SpeechRecognition engine
-  const handleTranscript = (text: string) => {
-    setLiveTranscript(text);
-    setIsTranscribing(true);
-    // Dim the indicator after 2s of silence
-    setTimeout(() => setIsTranscribing(false), 2000);
-  };
-
-  // --- THE BRAIN: Vision to Voice to Santiago LLM-Judge ---
-  const handleTelemetry = (packet: RiskPacket, verdict: string) => {
-    setLatestRisk(packet);
-    
-    // Clear warnings if memory is reset
-    if (packet.risk_score === 0 || packet.intervention_level === "CLEAR") {
-      setHasWarned(false);
+  const handleFile = useCallback(async (file: File) => {
+    if (!file.name.toLowerCase().endsWith(".pdf")) {
+      setError("Only PDF files are accepted.");
+      return;
     }
 
-    // Trigger at 40% Risk
-    if (packet.intervention_level === "HARD_WARNING" && !hasWarned) {
-      setHasWarned(true);
-      setLiveTranscript("AI: Candidate, anomalous behavior detected. Please explain your deviation from the screen.");
-      
-      // 1. TEXT TO SPEECH (The Interrogation)
-      const utterance = new SpeechSynthesisUtterance(
-        "Candidate, anomalous behavior detected. Please explain your deviation from the screen."
+    setError("");
+    setFileName(file.name);
+    setPhase("loading");
+    setLoadingStep(0);
+
+    const stepInterval = setInterval(() => {
+      setLoadingStep((prev) =>
+        prev < LOADING_MESSAGES.length - 1 ? prev + 1 : prev
       );
-      utterance.rate = 0.95;
-      utterance.pitch = 0.8;
-      
-      // 2. SPEECH TO TEXT (The Santiago LLM-Judge Loop)
-      utterance.onend = () => {
-        // Fallback for different browser implementations
-        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-        
-        if (SpeechRecognition) {
-          const recognition = new SpeechRecognition();
-          recognition.continuous = false;
-          recognition.interimResults = true; // Show words as they are spoken
-
-          recognition.onstart = () => {
-            setLiveTranscript("MICROPHONE LIVE. RECORDING CANDIDATE AUDIO...");
-          };
-
-          recognition.onresult = (event: any) => {
-            const current = event.resultIndex;
-            const transcript = event.results[current][0].transcript;
-            setLiveTranscript(`CANDIDATE: "${transcript}"`);
-          };
-
-          recognition.onend = () => {
-            setLiveTranscript("TRANSMITTING TO SANTIAGO LLM-JUDGE FOR EVALUATION...");
-            
-            // Here is where we will eventually POST to your FastAPI backend.
-            // For now, we simulate the LLM analyzing the excuse:
-            setTimeout(() => {
-              setLiveTranscript("EVALUATION COMPLETE. EXCUSE LOGGED. RESUMING STANDBY.");
-            }, 4000);
-          };
-
-          recognition.start();
-        } else {
-          setLiveTranscript("ERROR: SPEECH RECOGNITION NOT SUPPORTED IN THIS BROWSER.");
-        }
-      };
-
-      window.speechSynthesis.speak(utterance);
-    }
-  };
-
-  const handleEndSession = async () => {
-    // Auto-disengage optics immediately so the candidate sees the camera stop the
-    // moment the report is requested, and so no further /analyze-frame calls hit
-    // the backend while the verdict is being generated.
-    sniperRef.current?.stopCamera();
-
-    setIsGenerating(true);
-    setLiveTranscript("AI Coach is analyzing your performance...");
+    }, 1800);
 
     try {
-      const actualSessionDuration = Math.floor((Date.now() - sessionStartTime) / 1000);
+      // Check cache first
+      const fileHash = await hashFile(file);
+      const cached = getCachedResult(fileHash);
 
-      const payload = {
-        candidate_id: latestRisk?.candidate_id || "major_project_candidate_01",
-        total_violations: latestRisk?.violation_count || 0,
-        risk_score: latestRisk?.risk_score || 0,
-        session_duration_sec: actualSessionDuration,
-        critical_flags: latestRisk?.critical_flags || [],
-        // Scope the verdict to events from this page-load forward so prior runs
-        // don't leak into the report. Backend compares against SQLite TEXT
-        // timestamps (sortable lexicographically when in ISO format).
-        session_started_at: new Date(sessionStartTime).toISOString(),
-      };
+      if (cached) {
+        clearInterval(stepInterval);
+        sessionStorage.setItem(
+          "guard_session",
+          JSON.stringify({
+            questions: cached.questions,
+            resume_text: cached.resume_text,
+            file_name: file.name,
+          })
+        );
+        router.push("/sentry");
+        return;
+      }
 
-      const response = await fetch("http://localhost:8080/generate-verdict", {
+      // No cache hit — call backend
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const res = await fetch(`${API_BASE}/api/v1/interview/upload-resume`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: formData,
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        localStorage.setItem("verdictData", JSON.stringify(data));
-        router.push("/verdict");
-      } else {
-        setLiveTranscript("ERROR: Failed to generate report.");
-        setIsGenerating(false);
+      if (!res.ok) {
+        const detail = await res.json().catch(() => null);
+        throw new Error(detail?.detail || `Server responded with ${res.status}`);
       }
-    } catch {
-      setLiveTranscript("ERROR: Backend unreachable.");
-      setIsGenerating(false);
+
+      const data = await res.json();
+      clearInterval(stepInterval);
+
+      // Cache the result
+      setCachedResult(fileHash, {
+        questions: data.questions || [],
+        resume_text: data.resume_text || "",
+      });
+
+      sessionStorage.setItem(
+        "guard_session",
+        JSON.stringify({
+          questions: data.questions || [],
+          resume_text: data.resume_text || "",
+          file_name: file.name,
+        })
+      );
+
+      router.push("/sentry");
+    } catch (err: unknown) {
+      clearInterval(stepInterval);
+      const message = err instanceof Error ? err.message : "Upload failed";
+      setError(message);
+      setPhase("idle");
     }
-  };
+  }, [router]);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragOver(false);
+      const file = e.dataTransfer.files[0];
+      if (file) handleFile(file);
+    },
+    [handleFile]
+  );
+
+  const handleSelect = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file) handleFile(file);
+    },
+    [handleFile]
+  );
 
   return (
-    <main className="min-h-screen bg-[var(--color-canvas)] flex flex-col px-5 md:px-8 py-7 text-[var(--color-parchment)] items-center overflow-x-hidden">
-      {/* Top bar — VoltAgent terminal-native: brand left, CTA right */}
-      <header className="w-full max-w-[1400px] mb-5 flex justify-between items-center border-b border-[var(--color-hairline)] pb-5">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg lift-2 flex items-center justify-center">
-            <span className="w-2 h-2 rounded-full bg-[var(--color-signal)] glow-pulse" />
+    <main className="min-h-screen bg-[var(--color-canvas)] text-[var(--color-parchment)] flex flex-col items-center justify-center px-6 py-12">
+      <motion.div
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, ease: "easeOut" }}
+        className="w-full max-w-[520px] flex flex-col items-center"
+      >
+        {/* Brand */}
+        <div className="flex items-center gap-3 mb-10">
+          <div className="w-10 h-10 rounded-lg lift-2 flex items-center justify-center">
+            <Shield size={20} className="text-[var(--color-signal)]" />
           </div>
           <div className="flex flex-col">
-            <h1 className="font-display text-[18px] font-semibold tracking-tight text-[var(--color-snow)] leading-none">
-              GUARD
+            <h1 className="font-display text-[22px] font-semibold tracking-tight text-[var(--color-snow)] leading-none">
+              G.U.A.R.D.
             </h1>
-            <span className="eyebrow mt-1.5">Edge-AI Proctoring</span>
+            <span className="eyebrow mt-1">Edge-AI Interview Mirror</span>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <span className="hidden md:inline-flex items-center gap-2 px-2.5 py-1 rounded-md text-[11px] font-medium border border-[var(--color-hairline)] bg-[var(--color-surface)] text-[var(--color-slate)]">
-            <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-signal)] pulse-signal" />
-            Local · 127.0.0.1
-          </span>
-          <button
-            onClick={handleEndSession}
-            disabled={isGenerating}
-            className="h-9 px-4 rounded-md bg-[var(--color-surface)] text-[var(--color-mint)] text-[12px] font-medium border border-[var(--color-hairline)] hover:border-[var(--color-signal)] hover:text-[var(--color-signal)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+        {phase === "idle" && (
+          <motion.div
+            key="upload"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="w-full"
           >
-            {isGenerating ? "Analyzing…" : "End session · generate report"}
-          </button>
-        </div>
-      </header>
-
-
-      {/* Dashboard grid */}
-      <div className="w-full max-w-[1400px] flex flex-col 2xl:flex-row gap-6 items-start justify-center">
-
-        {/* Vision Sentry */}
-        <div className="flex-1 w-full">
-          <SniperScope ref={sniperRef} onTelemetryUpdate={handleTelemetry} />
-        </div>
-
-        {/* Interrogator stack */}
-        <div className="flex-shrink-0 flex flex-col gap-4 w-full 2xl:w-[340px]">
-          <VoiceOrb onTranscriptUpdate={setLiveTranscript} />
-
-          {/* Live transcript */}
-          <div className="lift-1 rounded-lg p-5 flex flex-col min-h-[200px] relative overflow-hidden">
-            <div
-              className={`absolute top-0 left-0 w-full h-px transition-colors duration-300 ${
-                isTranscribing ? "bg-[var(--color-signal)]" : "bg-[var(--color-hairline)]"
-              }`}
-            />
-            <span className="eyebrow mb-3 flex items-center gap-2">
-              <span
-                className={`w-1.5 h-1.5 rounded-full transition-colors ${
-                  isTranscribing ? "bg-[var(--color-signal)] pulse-signal" : "bg-[var(--color-fog)]"
-                }`}
-              />
-              Voice transcript
-            </span>
-            <p
-              className={`text-[12.5px] leading-relaxed font-mono transition-colors duration-300 ${
-                isTranscribing ? "text-[var(--color-signal)]" : "text-[var(--color-parchment)]"
+            <label
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={handleDrop}
+              className={`w-full flex flex-col items-center justify-center gap-4 p-10 rounded-xl border-2 border-dashed cursor-pointer transition-all duration-200 ${
+                dragOver
+                  ? "border-[var(--color-signal)] bg-[var(--color-signal)]/[0.04]"
+                  : "border-[var(--color-hairline)] hover:border-[var(--color-signal)]/50 bg-[var(--color-surface)]"
               }`}
             >
-              <span className="text-[var(--color-fog)] mr-2">&gt;</span>
-              {liveTranscript || "Waiting for audio…"}
+              <input
+                type="file"
+                accept=".pdf"
+                className="hidden"
+                onChange={handleSelect}
+              />
+              <div className="w-14 h-14 rounded-xl bg-[var(--color-signal-soft)] flex items-center justify-center">
+                <Upload size={24} className="text-[var(--color-signal)]" />
+              </div>
+              <div className="text-center">
+                <p className="text-sm font-medium text-[var(--color-snow)]">
+                  Drop your resume here
+                </p>
+                <p className="text-[12px] text-[var(--color-slate)] mt-1">
+                  PDF only · Processed locally on edge
+                </p>
+              </div>
+            </label>
+
+            {error && (
+              <p className="mt-4 text-sm text-[var(--color-danger)] text-center">{error}</p>
+            )}
+
+            <p className="mt-8 text-[12px] text-[var(--color-slate)] text-center leading-relaxed max-w-[400px] mx-auto">
+              Upload your resume and the AI will generate tailored STAR behavioral
+              questions. You&apos;ll practice answering while the mirror captures your
+              focus and body language — all processed locally on your device.
             </p>
-          </div>
+          </motion.div>
+        )}
+
+        {phase === "loading" && (
+          <motion.div
+            key="loading"
+            initial={{ opacity: 0, scale: 0.97 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="w-full flex flex-col items-center gap-6"
+          >
+            <div className="flex items-center gap-3">
+              <FileText size={18} className="text-[var(--color-signal)]" />
+              <span className="text-sm font-medium text-[var(--color-snow)]">{fileName}</span>
+            </div>
+
+            <div className="w-full max-w-[360px] flex flex-col gap-3">
+              {LOADING_MESSAGES.map((msg, i) => (
+                <div
+                  key={i}
+                  className={`flex items-center gap-2.5 text-[12px] font-mono transition-all duration-300 ${
+                    i <= loadingStep ? "text-[var(--color-signal)]" : "text-[var(--color-slate)]/40"
+                  }`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full transition-colors ${
+                    i < loadingStep
+                      ? "bg-[var(--color-signal)]"
+                      : i === loadingStep
+                      ? "bg-[var(--color-signal)] pulse-signal"
+                      : "bg-[var(--color-fog)]"
+                  }`} />
+                  {msg}
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2 mt-4">
+              <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-signal)] pulse-signal" />
+              <span className="text-[11px] text-[var(--color-slate)] uppercase tracking-wider">
+                Processing on edge
+              </span>
+            </div>
+          </motion.div>
+        )}
+
+        {/* Footer badge */}
+        <div className="mt-12 flex items-center gap-2 px-3 py-1.5 rounded-md border border-[var(--color-hairline)] bg-[var(--color-surface)]">
+          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-signal)] pulse-signal" />
+          <span className="text-[10px] font-medium text-[var(--color-slate)] uppercase tracking-wider">
+            Local · Edge Processing · No data leaves your device
+          </span>
         </div>
-      </div>
-
-      {/* Audit trail — full-width security event ledger */}
-      <div className="w-full max-w-[1400px] mt-6 h-[420px]">
-        <AuditTrail />
-      </div>
-
-      {/* Verdict generation overlay — blurs everything while the LLM works */}
-      <LoadingOverlay open={isGenerating} />
+      </motion.div>
     </main>
   );
 }

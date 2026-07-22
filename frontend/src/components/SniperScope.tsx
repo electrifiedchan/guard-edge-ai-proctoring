@@ -18,10 +18,11 @@ export interface SniperScopeHandle {
 
 interface SniperScopeProps {
   onTelemetryUpdate: (packet: RiskPacket, verdict: string) => void;
+  onDisengage?: () => void;
   ref?: Ref<SniperScopeHandle>;
 }
 
-export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps) {
+export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: SniperScopeProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -478,7 +479,7 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
       }
       gatekeeperRef.current = null;
     }
-    
+
     if (videoRef.current && videoRef.current.srcObject) {
       const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
       tracks.forEach(track => track.stop());
@@ -487,6 +488,7 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
     loopRunningRef.current = false;
     setIsScanning(false);
     setSysStatus("IDLE");
+    onDisengage?.();
   };
 
   // Expose stopCamera so the parent can auto-disengage on "End session".
@@ -534,9 +536,13 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
       }
 
       try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+
         const response = await fetch("http://localhost:8080/api/v1/analyze-frame", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
             candidate_id: CANDIDATE_ID,
             timestamp: Date.now(),
@@ -547,6 +553,8 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
             gaze_vector: telemetryRef.current.gaze_vector
           })
         });
+        clearTimeout(timeoutId);
+
 
         const data = await response.json();
 
@@ -613,7 +621,7 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
     "text-[var(--color-snow)]";
 
   return (
-    <div className="w-full flex flex-col xl:flex-row gap-6 items-start relative">
+    <div className="w-full flex flex-col gap-3 relative">
 
       {/* Toast — minimal, hairline-bordered, no neon glow spam */}
       <AnimatePresence>
@@ -642,7 +650,7 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
 
       {/* LEFT — Camera frame */}
       <div
-        className={`relative w-full xl:w-[800px] h-[450px] rounded-lg overflow-hidden flex-shrink-0 lift-1 haze transition-shadow ${
+        className={`relative w-full h-[380px] rounded-lg overflow-hidden flex-shrink-0 lift-1 haze transition-shadow ${
           sysStatus === "ACTIVE" ? "ring-signal" : ""
         }`}
       >
@@ -734,14 +742,14 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
           {!isScanning ? (
             <button
               onClick={startCamera}
-              className="px-4 h-9 rounded-md bg-[var(--color-surface)] text-[var(--color-mint)] text-[12px] font-medium border border-[var(--color-hairline)] hover:border-[var(--color-signal)] hover:text-[var(--color-signal)] transition-colors cursor-pointer backdrop-blur-md"
+              className="px-4 h-9 rounded-md bg-[var(--color-signal)]/15 text-[var(--color-signal)] text-[12px] font-medium border border-[var(--color-signal)]/40 hover:bg-[var(--color-signal)]/25 hover:border-[var(--color-signal)] transition-colors cursor-pointer backdrop-blur-md"
             >
               Engage sentry
             </button>
           ) : (
             <button
               onClick={stopCamera}
-              className="px-4 h-9 rounded-md bg-[var(--color-surface)]/80 backdrop-blur-md border border-[var(--color-hairline)] text-[var(--color-slate)] text-[12px] font-medium hover:border-[var(--color-danger)]/50 hover:text-[var(--color-danger)] transition-colors cursor-pointer"
+              className="px-4 h-9 rounded-md bg-[var(--color-danger)]/10 backdrop-blur-md border border-[var(--color-danger)]/30 text-[var(--color-danger)] text-[12px] font-medium hover:bg-[var(--color-danger)]/20 hover:border-[var(--color-danger)]/60 transition-colors cursor-pointer"
             >
               Disengage
             </button>
@@ -749,67 +757,65 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
         </div>
       </div>
 
-      {/* RIGHT — Telemetry stack */}
-      <div className="flex-1 w-full flex flex-col gap-4">
+      {/* Bottom — Telemetry strip */}
+      <div className="w-full flex flex-col sm:flex-row gap-3">
 
         {/* BEA Temporal panel */}
-        <div className="lift-1 rounded-lg p-5">
-          <div className="flex justify-between items-center mb-5">
+        <div className="lift-1 rounded-lg p-3 flex-1">
+          <div className="flex justify-between items-center mb-2">
             <span className="eyebrow flex items-center gap-2">
               <span className="w-1 h-1 rounded-full bg-[var(--color-fog)]" />
               BEA · Temporal
             </span>
             <button
               onClick={handleReset}
-              className="h-7 px-2.5 rounded-md text-[11px] font-medium text-[var(--color-slate)] border border-[var(--color-hairline)] bg-transparent hover:text-[var(--color-danger)] hover:border-[var(--color-danger)]/50 transition-colors cursor-pointer"
+              className="h-6 px-2 rounded-md text-[10px] font-medium text-[var(--color-warn)]/70 border border-[var(--color-warn)]/20 bg-transparent hover:text-[var(--color-warn)] hover:border-[var(--color-warn)]/50 transition-colors cursor-pointer"
             >
               Clear memory
             </button>
           </div>
 
-          <div className="flex flex-col mb-6">
-            <span className="eyebrow mb-2">Cumulative risk</span>
-            <h2
-              data-text={`${riskScore}%`}
-              data-active={riskScore === 100 ? "true" : "false"}
-              className={`font-display text-[64px] leading-none tabular font-semibold tracking-tight transition-colors duration-500 ${riskColor} ${
-                riskScore === 100 ? "glitch-text" : ""
-              }`}
-            >
-              {riskScore}
-              <span className="text-[var(--color-fog)] text-[36px] font-medium ml-0.5">%</span>
-            </h2>
-          </div>
+          <div className="flex items-center gap-6">
+            <div className="flex flex-col">
+              <span className="eyebrow mb-0.5">Cumulative risk</span>
+              <h2
+                data-text={`${riskScore}%`}
+                data-active={riskScore === 100 ? "true" : "false"}
+                className={`font-display text-[28px] leading-none tabular font-semibold tracking-tight transition-colors duration-500 ${riskColor} ${
+                  riskScore === 100 ? "glitch-text" : ""
+                }`}
+              >
+                {riskScore}
+                <span className="text-[var(--color-fog)] text-[18px] font-medium ml-0.5">%</span>
+              </h2>
+            </div>
 
-          {/* Intervention tier */}
-          <div className={`px-3.5 py-3 rounded-lg border flex justify-between items-center mb-5 transition-colors duration-500 ${tierStyles[tierToken]}`}>
+            <div className={`px-2.5 py-1.5 rounded-lg border flex items-center gap-2 transition-colors duration-500 ${tierStyles[tierToken]}`}>
+              <div className="flex flex-col gap-0.5">
+                <span className="eyebrow opacity-80">Tier</span>
+                <span className="text-[11px] font-medium">{interventionLevel}</span>
+              </div>
+              {interventionLevel !== "CLEAR" && (
+                <span className={`w-1.5 h-1.5 rounded-full bg-current ${
+                  tierToken === "danger" ? "pulse-danger" : ""
+                }`} />
+              )}
+            </div>
+
             <div className="flex flex-col gap-0.5">
-              <span className="eyebrow opacity-80">Intervention tier</span>
-              <span className="text-[13px] font-medium">{interventionLevel}</span>
-            </div>
-            {interventionLevel !== "CLEAR" && (
-              <span className={`w-1.5 h-1.5 rounded-full bg-current ${
-                tierToken === "danger" ? "pulse-danger" : ""
-              }`} />
-            )}
-          </div>
-
-          {/* Stats row */}
-          <div className="grid grid-cols-2 gap-3 pt-4 border-t border-[var(--color-hairline)]">
-            <div className="flex flex-col gap-1">
               <span className="eyebrow">Violations</span>
-              <span className="text-[18px] font-semibold tabular text-[var(--color-snow)]">{violationCount}</span>
+              <span className="text-[14px] font-semibold tabular text-[var(--color-snow)]">{violationCount}</span>
             </div>
-            <div className="flex flex-col gap-1">
+            <div className="flex flex-col gap-0.5">
               <span className="eyebrow">Window</span>
-              <span className="text-[18px] font-semibold tabular text-[var(--color-parchment)]">5m</span>
+              <span className="text-[14px] font-semibold tabular text-[var(--color-parchment)]">5m</span>
             </div>
           </div>
         </div>
 
         {/* Behavioral Log */}
-        <div className="lift-1 rounded-lg p-5 flex flex-col min-h-[120px]">
-          <span className="eyebrow mb-3 flex items-center gap-2">
+        <div className="lift-1 rounded-lg px-3 py-2.5 flex flex-col justify-center sm:w-[200px] flex-shrink-0">
+          <span className="eyebrow mb-1 flex items-center gap-2">
             <span
               className={`w-1.5 h-1.5 rounded-full ${
                 sysStatus === "ACTIVE" ? "bg-[var(--color-signal)] pulse-signal" : "bg-[var(--color-fog)]"
@@ -818,7 +824,7 @@ export default function SniperScope({ onTelemetryUpdate, ref }: SniperScopeProps
             Behavioral Log
           </span>
           <p
-            className={`font-mono text-[12px] leading-relaxed ${
+            className={`font-mono text-[11px] leading-snug ${
               latestVerdict.includes("CRITICAL") || latestVerdict.includes("FATAL")
                 ? "text-[var(--color-danger)]"
                 : "text-[var(--color-parchment)]"

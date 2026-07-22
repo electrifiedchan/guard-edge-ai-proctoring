@@ -7,12 +7,18 @@ export type VoiceState = "IDLE" | "LISTEN" | "PROCESS" | "SPEAK";
 
 interface VoiceOrbProps {
   onTranscriptUpdate?: (text: string) => void;
+  externalState?: VoiceState;
 }
 
-export default function VoiceOrb({ onTranscriptUpdate }: VoiceOrbProps) {
+export default function VoiceOrb({ onTranscriptUpdate, externalState }: VoiceOrbProps) {
   const [voiceState, setVoiceState] = useState<VoiceState>("IDLE");
   const [devMode, setDevMode] = useState(false);
-  const [isEngaged, setIsEngaged] = useState(false); // Default to false to prevent rogue polling on load
+  const [isEngaged, setIsEngaged] = useState(false);
+
+  // If parent drives state externally, sync it
+  useEffect(() => {
+    if (externalState) setVoiceState(externalState);
+  }, [externalState]);
 
   // Simulate VAD-driven framer motion scale
   const orbScale = useSpring(1, { stiffness: 280, damping: 22 });
@@ -63,7 +69,7 @@ export default function VoiceOrb({ onTranscriptUpdate }: VoiceOrbProps) {
   const v = stateMeta[voiceState];
 
   return (
-    <div className="lift-1 rounded-lg p-6 relative overflow-hidden flex flex-col items-center">
+    <div className={`lift-1 rounded-lg relative overflow-hidden flex flex-col items-center ${externalState ? "p-4" : "p-6"}`}>
       <button
         onClick={() => setDevMode(d => !d)}
         className="absolute top-2 right-2 w-4 h-4 bg-transparent hover:bg-[var(--color-surface-2)] rounded cursor-pointer z-50 transition-colors"
@@ -79,7 +85,7 @@ export default function VoiceOrb({ onTranscriptUpdate }: VoiceOrbProps) {
         Audio interrogator
       </span>
 
-      <div className="relative w-32 h-32 my-8 flex items-center justify-center">
+      <div className={`relative flex items-center justify-center ${externalState ? "w-20 h-20 my-4" : "w-32 h-32 my-8"}`}>
         <motion.div
           animate={{
             boxShadow: voiceState === "IDLE"
@@ -117,18 +123,20 @@ export default function VoiceOrb({ onTranscriptUpdate }: VoiceOrbProps) {
         {v.label}
       </p>
 
-      <button
-        onClick={() => setIsEngaged(!isEngaged)}
-        className={`mt-5 h-9 px-4 rounded-md text-[12px] font-medium border transition-colors cursor-pointer ${
-          isEngaged
-            ? "bg-transparent border-[var(--color-danger)]/40 text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"
-            : "bg-[var(--color-surface)] border-[var(--color-hairline)] text-[var(--color-mint)] hover:border-[var(--color-signal)] hover:text-[var(--color-signal)]"
-        }`}
-      >
-        {isEngaged ? "Deactivate sync" : "Activate sync"}
-      </button>
+      {!externalState && (
+        <button
+          onClick={() => setIsEngaged(!isEngaged)}
+          className={`mt-5 h-9 px-4 rounded-md text-[12px] font-medium border transition-colors cursor-pointer ${
+            isEngaged
+              ? "bg-[var(--color-danger)]/10 border-[var(--color-danger)]/30 text-[var(--color-danger)] hover:bg-[var(--color-danger)]/20 hover:border-[var(--color-danger)]/60"
+              : "bg-[var(--color-signal)]/15 border-[var(--color-signal)]/40 text-[var(--color-signal)] hover:bg-[var(--color-signal)]/25 hover:border-[var(--color-signal)]"
+          }`}
+        >
+          {isEngaged ? "Deactivate sync" : "Activate sync"}
+        </button>
+      )}
 
-      {devMode && (
+      {devMode && !externalState && (
         <div className="mt-6 pt-4 border-t border-[var(--color-hairline)] w-full flex flex-col items-center gap-2">
           <span className="eyebrow">Dev override</span>
           <div className="flex gap-1.5 flex-wrap justify-center">
