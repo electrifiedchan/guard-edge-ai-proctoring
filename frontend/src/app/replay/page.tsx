@@ -5,6 +5,8 @@ import { useSearchParams } from "next/navigation";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { motion, Variants } from "framer-motion";
 import { AlertTriangle, CheckCircle, HelpCircle, Activity } from "lucide-react";
+import DashboardButton from "@/components/DashboardButton";
+
 
 const API = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
 
@@ -71,7 +73,20 @@ function ReplayContent() {
       const res = await fetch(`${API}/api/v1/session/${id}/timeline`);
       if (!res.ok) throw new Error("Failed to fetch session telemetry");
       const json = await res.json();
-      setData(json);
+      // Normalise before it reaches render. A session with no rows, or an older
+      // payload shape, must not be able to throw on data.stats.* mid-render and
+      // blank the page — an empty replay is a legitimate result, not a crash.
+      setData({
+        headline: json?.headline ?? "No telemetry recorded for this session.",
+        stats: {
+          eye_contact_pct: json?.stats?.eye_contact_pct ?? 0,
+          talking_pct: json?.stats?.talking_pct ?? 0,
+          longest_focus_streak_s: json?.stats?.longest_focus_streak_s ?? 0,
+        },
+        frames: Array.isArray(json?.frames) ? json.frames : [],
+        moments: Array.isArray(json?.moments) ? json.moments : [],
+      });
+
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -102,21 +117,27 @@ function ReplayContent() {
             <h1 className="text-3xl font-semibold text-neutral-100 tracking-tight">Session Replay</h1>
             <p className="text-xs text-neutral-500 mt-1 uppercase tracking-[0.2em]">Flight Recorder Diagnostics</p>
           </div>
-          <form onSubmit={handleSearch} className="flex gap-2">
-            <input
-              type="text"
-              placeholder="Enter Session ID..."
-              value={sessionId}
-              onChange={(e) => setSessionId(e.target.value)}
-              className="bg-neutral-900 border border-neutral-800 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-colors placeholder:text-neutral-600"
-            />
-            <button
-              type="submit"
-              className="bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-200 font-medium px-4 py-2 rounded-lg text-sm transition-colors"
-            >
-              Analyze
-            </button>
-          </form>
+          <div className="flex items-center gap-3">
+            <form onSubmit={handleSearch} className="flex gap-2">
+              <input
+                type="text"
+                placeholder="Enter Session ID..."
+                value={sessionId}
+                onChange={(e) => setSessionId(e.target.value)}
+                className="bg-neutral-900 border border-neutral-800 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-colors placeholder:text-neutral-600"
+              />
+              <button
+                type="submit"
+                className="bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-200 font-medium px-4 py-2 rounded-lg text-sm transition-colors"
+              >
+                Analyze
+              </button>
+            </form>
+            {/* Corner identity chip / route back to dashboard — same one every
+                other page carries, so replay is no longer the odd page out. */}
+            <DashboardButton />
+          </div>
+
         </header>
 
         {/* Loading / Error States */}

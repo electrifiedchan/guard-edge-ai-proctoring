@@ -52,6 +52,27 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
 
   const CANDIDATE_ID = "major_project_candidate_01";
 
+  // One id per practice run, minted at mount. Two distinct grains:
+  //   CANDIDATE_ID -> stable identity (BEA lockout, /status, /reset-session)
+  //   session_id   -> one row per run, so dashboard trends/streaks/deltas move.
+  // Format must stay "{candidate_id}__{rand}" — the dashboard query prefix-matches it.
+  const sessionIdRef = useRef<string>("");
+  if (!sessionIdRef.current) {
+    const rand =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID().replace(/-/g, "").slice(0, 12)
+        : Math.random().toString(36).slice(2, 14);
+    sessionIdRef.current = `${CANDIDATE_ID}__${rand}`;
+    // The report page needs this id to fetch the run's timeline. It was only
+    // ever held in this ref, so /report had no way to ask for the frames it
+    // had just generated and rendered a session with no drift history at all.
+    try {
+      sessionStorage.setItem("guard_vision_session", sessionIdRef.current);
+    } catch {
+      // sessionStorage unavailable — the report falls back to the candidate id.
+    }
+  }
+
   const [isFaceMeshReady, setIsFaceMeshReady] = useState(false);
 
   // --- MEDIAPIPE GATEKEEPER STATE ---
@@ -483,16 +504,34 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
     if (videoRef.current && videoRef.current.srcObject) {
       const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
       tracks.forEach(track => track.stop());
+      // Detach the spent stream. Stopping tracks leaves them in "ended" state
+      // but still bound to the element, so a re-engage would attach a fresh
+      // stream on top of a dead one and the video never produced frames —
+      // MediaPipe then had nothing to read and the interview never restarted.
+      videoRef.current.srcObject = null;
     }
     if (loopTimerRef.current) clearTimeout(loopTimerRef.current);
     loopRunningRef.current = false;
+    // Reset calibration so a re-engage recalibrates against a fresh baseline
+    // instead of inheriting the previous run's head-pose reference.
+    calibrationRef.current.isCalibrating = false;
+    calibrationRef.current.samples = [];
+    calibrationRef.current.baselinePitch = null;
+    calibrationRef.current.baselineYaw = null;
+    calibrationRef.current.baselineGazeX = null;
+    calibrationRef.current.baselineGazeY = null;
+    setIsCalibrating(false);
     setIsScanning(false);
     setSysStatus("IDLE");
     onDisengage?.();
   };
 
   // Expose stopCamera so the parent can auto-disengage on "End session".
-  useImperativeHandle(ref, () => ({ stopCamera }), []);
+  // Kept in a ref: an empty-dep useImperativeHandle froze the first render's
+  // stopCamera, which closed over a stale onDisengage.
+  const stopCameraRef = useRef(stopCamera);
+  stopCameraRef.current = stopCamera;
+  useImperativeHandle(ref, () => ({ stopCamera: () => stopCameraRef.current() }), []);
 
   // --- 4. THE SELF-HEALING ASYNC LOOP ---
   // useCallback with no deps + refs for changing values keeps this function reference
@@ -545,6 +584,7 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
           signal: controller.signal,
           body: JSON.stringify({
             candidate_id: CANDIDATE_ID,
+            session_id: sessionIdRef.current,
             timestamp: Date.now(),
             image_base64: base64Image,
             faces_detected: telemetryRef.current.faces_detected,

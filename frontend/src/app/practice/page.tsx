@@ -18,6 +18,7 @@ import {
   Bot,
 } from "lucide-react";
 import FocusPIP from "@/components/FocusPIP";
+import DashboardButton from "@/components/DashboardButton";
 import { useVAD } from "@/hooks/useVAD";
 
 type Question = {
@@ -375,13 +376,10 @@ export default function PracticeGym() {
             </div>
           </div>
 
-          <button
-            onClick={() => router.push("/")}
-            className="h-9 px-4 rounded-md bg-[var(--color-surface)] text-[var(--color-mint)] text-[12px] font-medium border border-[var(--color-hairline)] hover:border-[var(--color-signal)] hover:text-[var(--color-signal)] transition-colors cursor-pointer flex items-center gap-1.5"
-          >
-            <ArrowLeft size={13} />
-            Dashboard
-          </button>
+          {/* Was a pill labelled "Dashboard" that actually pushed /upload.
+              Now the shared identity chip, and it goes where it says. */}
+          <DashboardButton />
+
         </motion.header>
 
         {/* Content */}
@@ -552,7 +550,7 @@ export default function PracticeGym() {
                   Local &middot; Edge Processing
                 </span>
                 <button
-                  onClick={() => router.push("/")}
+                  onClick={() => router.push("/dashboard")}
                   className="h-9 px-4 rounded-md bg-[var(--color-surface)] text-[var(--color-mint)] text-[12px] font-medium border border-[var(--color-hairline)] hover:border-[var(--color-signal)] hover:text-[var(--color-signal)] transition-colors cursor-pointer"
                 >
                   Return to Dashboard
@@ -779,7 +777,7 @@ export default function PracticeGym() {
                   New Session
                 </button>
                 <button
-                  onClick={() => router.push("/")}
+                  onClick={() => router.push("/dashboard")}
                   className="h-10 px-5 rounded-md bg-[var(--color-surface)] text-[var(--color-mint)] text-sm font-medium border border-[var(--color-hairline)] hover:border-[var(--color-signal)] hover:text-[var(--color-signal)] transition-colors cursor-pointer flex items-center gap-2"
                 >
                   <ArrowLeft size={14} />

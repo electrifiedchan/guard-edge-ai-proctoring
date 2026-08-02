@@ -35,6 +35,12 @@ export interface ViolationTemplate {
   whatHappened: (b: ViolationBucket) => string;
   whyItMatters: string;
   coachAdvice: string;
+  /**
+   * Second-person caption printed under the captured frame. The frame alone is
+   * ambiguous — it is a photo of you sitting at a desk. This names what the
+   * detector saw in it, which is the whole point of showing proof.
+   */
+  frameCaption: string;
 }
 
 export const VIOLATION_TEMPLATES: Record<ViolationType, ViolationTemplate> = {
@@ -47,6 +53,7 @@ export const VIOLATION_TEMPLATES: Record<ViolationType, ViolationTemplate> = {
       "From a proctor's view, sustained downward gaze reads as referencing notes or a phone in your lap, even when nothing is actually there.",
     coachAdvice:
       "Park your hands and any reference material above the desk line. If you need to think, look slightly up or to the side instead of down — it reads as reflection, not avoidance.",
+    frameCaption: "Your eyeline dropped below the screen here.",
   },
   SIDE_GAZE: {
     title: "Looked off-camera",
@@ -57,6 +64,7 @@ export const VIOLATION_TEMPLATES: Record<ViolationType, ViolationTemplate> = {
       "Glancing off-screen suggests a second monitor, another person, or notes outside the frame. Even brief side-glances accumulate quickly.",
     coachAdvice:
       "Close everything except the interview window before you start. Keep one screen, one camera, one focal point. If your room has movement behind you, reposition so the wall is at your back.",
+    frameCaption: "You looked away from the camera here.",
   },
   MOBILE_DEVICE: {
     title: "Phone visible in frame",
@@ -67,6 +75,7 @@ export const VIOLATION_TEMPLATES: Record<ViolationType, ViolationTemplate> = {
       "Phones in frame are an immediate red flag for any proctored process — they short-circuit the rest of the conversation regardless of intent.",
     coachAdvice:
       "Phone goes face-down in another room, or in a drawer. If you need it for 2FA, bring it in only when prompted, then put it back. Never on the desk during a session.",
+    frameCaption: "A phone was visible in the shot here.",
   },
   PROHIBITED_ITEM: {
     title: "Reference material visible",
@@ -77,6 +86,7 @@ export const VIOLATION_TEMPLATES: Record<ViolationType, ViolationTemplate> = {
       "Books and second screens in frame imply you might be reading from them, even if they're closed or unrelated.",
     coachAdvice:
       "Clear the desk to the essentials: your monitor, keyboard, water, a single notepad. Move every other surface item out of camera reach before you begin.",
+    frameCaption: "Reference material was in shot here.",
   },
   MULTIPLE_FACES: {
     title: "Another person in frame",
@@ -87,6 +97,7 @@ export const VIOLATION_TEMPLATES: Record<ViolationType, ViolationTemplate> = {
       "A second face — even a passerby — is one of the hardest patterns to recover from. It's read as collusion until proven otherwise.",
     coachAdvice:
       "Pick a closed room. Tell housemates the start and end time. A 'do not disturb' sign on the door costs nothing and removes this entire risk class.",
+    frameCaption: "A second face appeared in the shot here.",
   },
   NO_FACE: {
     title: "Stepped out of frame",
@@ -97,6 +108,7 @@ export const VIOLATION_TEMPLATES: Record<ViolationType, ViolationTemplate> = {
       "An empty chair mid-session breaks continuity. Even a quick stretch can read as leaving to consult something.",
     coachAdvice:
       "Set up everything you need within arm's reach before you start: water, tissues, charger. Treat the session as a single uninterrupted block.",
+    frameCaption: "You were out of the camera's view here.",
   },
   TALKING: {
     title: "Talking detected",
@@ -107,6 +119,7 @@ export const VIOLATION_TEMPLATES: Record<ViolationType, ViolationTemplate> = {
       "Audible speech when you weren't expected to be answering can suggest someone else in the room or coaching from off-camera.",
     coachAdvice:
       "If you're a 'think out loud' type, that's fine — just keep it framed (\"let me think this through out loud…\"). Silence in the room otherwise is your friend.",
+    frameCaption: "Speech was picked up here, off your answer turn.",
   },
 };
 

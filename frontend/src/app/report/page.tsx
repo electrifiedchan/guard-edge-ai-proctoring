@@ -1,9 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { motion } from "framer-motion";
-import { Shield, RotateCcw, Target, Eye, MessageSquare } from "lucide-react";
+import { Shield, RotateCcw, Target, Eye, MessageSquare, LayoutDashboard, ArrowRight, FileUp } from "lucide-react";
+import DashboardButton from "@/components/DashboardButton";
+import DriftTimeline, {
+  type TimelineFrame,
+  type TimelineMoment,
+} from "@/components/report/DriftTimeline";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8080";
 
 interface ReportData {
   report: string;
@@ -14,15 +22,60 @@ interface ReportData {
 export default function ReportPage() {
   const router = useRouter();
   const [data, setData] = useState<ReportData | null>(null);
+  const [frames, setFrames] = useState<TimelineFrame[]>([]);
+  const [moments, setMoments] = useState<TimelineMoment[]>([]);
+  const [timelineState, setTimelineState] =
+    useState<"loading" | "ready" | "unavailable">("loading");
 
   useEffect(() => {
     const raw = sessionStorage.getItem("guard_report");
     if (!raw) {
-      router.push("/");
+      router.push("/upload");
       return;
     }
     setData(JSON.parse(raw));
   }, [router]);
+
+  /**
+   * Pull the per-frame telemetry for the run that just finished. The verdict
+   * already summarises composure as one number; this is what makes the report
+   * specific enough to act on — which minute drifted, for how long, and any
+   * frame the sentry flagged.
+   */
+  const loadTimeline = useCallback(async () => {
+    const visionSession = sessionStorage.getItem("guard_vision_session");
+    if (!visionSession) {
+      setTimelineState("unavailable");
+      return;
+    }
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/session/${encodeURIComponent(visionSession)}/timeline`,
+      );
+      if (!res.ok) throw new Error(`timeline ${res.status}`);
+
+      const payload = await res.json();
+      const nextFrames: TimelineFrame[] = payload.frames ?? [];
+      setFrames(nextFrames);
+      setMoments(payload.moments ?? []);
+      setTimelineState(nextFrames.length > 0 ? "ready" : "unavailable");
+    } catch {
+      // The coaching report is the main event; a missing timeline degrades the
+      // page rather than breaking it.
+      setTimelineState("unavailable");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!data) return;
+    // Frames are written via FastAPI background tasks, so the last few can land
+    // just after the verdict returns. One short retry avoids showing a timeline
+    // that's missing its own ending.
+    loadTimeline();
+    const retry = setTimeout(loadTimeline, 1500);
+    return () => clearTimeout(retry);
+  }, [data, loadTimeline]);
 
   if (!data) {
     return (
@@ -72,9 +125,12 @@ export default function ReportPage() {
               </h1>
             </div>
           </div>
-          <span className={`px-3 py-1.5 rounded-lg border text-[12px] font-semibold uppercase tracking-wider ${gradeColor}`}>
-            {overallGrade}
-          </span>
+          <div className="flex items-center gap-3">
+            <span className={`px-3 py-1.5 rounded-lg border text-[12px] font-semibold uppercase tracking-wider ${gradeColor}`}>
+              {overallGrade}
+            </span>
+            <DashboardButton />
+          </div>
         </header>
 
         {/* Metrics row */}
@@ -101,6 +157,17 @@ export default function ReportPage() {
           </div>
         </div>
 
+        {/* Attention timeline — the "when did I drift" evidence */}
+        {timelineState === "loading" && (
+          <div className="lift-1 rounded-lg p-6 flex items-center gap-2 text-[var(--color-slate)]">
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-signal)] pulse-signal" />
+            <span className="text-[13px]">Reconstructing attention timeline…</span>
+          </div>
+        )}
+        {timelineState === "ready" && (
+          <DriftTimeline frames={frames} moments={moments} />
+        )}
+
         {/* AI Report */}
         <div className="lift-1 rounded-lg p-6">
           <span className="eyebrow mb-4 flex items-center gap-2">
@@ -114,19 +181,65 @@ export default function ReportPage() {
           </div>
         </div>
 
+        {/* Progress hand-off — one session is a data point, the dashboard is
+            the trend. This was the missing exit from the flow: the report was
+            a dead end, so the dashboard we built was never reachable after a run. */}
+        <Link
+          href="/dashboard"
+          className="lift-1 rounded-lg p-5 flex items-center gap-4 group hover:border-[var(--color-signal)]/40 transition-colors"
+        >
+          <div className="w-10 h-10 rounded-lg bg-[var(--color-signal-soft)] flex items-center justify-center shrink-0">
+            <LayoutDashboard size={18} className="text-[var(--color-signal)]" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-[var(--color-snow)]">
+              See how this compares to your other sessions
+            </p>
+            <p className="text-[12px] text-[var(--color-slate)] mt-0.5">
+              Composure trend, practice streak, and your current focus area.
+            </p>
+          </div>
+          <ArrowRight
+            size={16}
+            className="text-[var(--color-slate)] group-hover:text-[var(--color-signal)] group-hover:translate-x-0.5 transition-all shrink-0"
+          />
+        </Link>
+
         {/* Actions */}
-        <div className="flex items-center gap-3 pt-2">
+        <div className="flex flex-wrap items-center gap-3 pt-2">
+          {/* Practising the same resume again is the common case, and it used to
+              cost a re-upload of a PDF the app had already parsed. guard_session
+              still holds the parsed text and questions, so /sentry can start
+              cold — only the finished report is cleared. */}
           <button
             onClick={() => {
               sessionStorage.removeItem("guard_report");
-              sessionStorage.removeItem("guard_session");
-              router.push("/");
+              // Deliberately NOT clearing guard_vision_session here — the next
+              // run mints its own id, and wiping it early would strand the
+              // timeline if the user comes back to this page.
+              router.push("/sentry");
             }}
             className="h-10 px-5 rounded-md bg-[var(--color-signal)] text-[var(--color-canvas)] text-sm font-semibold hover:brightness-110 transition-all cursor-pointer flex items-center gap-2"
           >
             <RotateCcw size={14} />
             New Session
           </button>
+          {/* The separate, rarer path: practise against a different resume. This
+              one does have to drop the parsed session. */}
+          <button
+            onClick={() => {
+              sessionStorage.removeItem("guard_report");
+              sessionStorage.removeItem("guard_session");
+              router.push("/upload");
+            }}
+            className="h-10 px-5 rounded-md border border-[var(--color-hairline)] bg-[var(--color-surface)] text-[var(--color-parchment)] text-sm font-medium hover:border-[var(--color-signal)] hover:text-[var(--color-signal)] transition-colors cursor-pointer flex items-center gap-2"
+          >
+            <FileUp size={14} />
+            Upload new resume
+          </button>
+          {/* A third dashboard link used to sit here, alongside the header chip
+              and the hand-off card above. Two routes to the same place is
+              already generous; three was noise. */}
         </div>
 
         {/* Footer */}

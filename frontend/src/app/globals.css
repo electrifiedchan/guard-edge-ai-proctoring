@@ -246,3 +246,33 @@ html, body {
   50%      { box-shadow: 0 0 0 6px rgba(251, 86, 91, 0);    }
 }
 .pulse-danger { animation: pulse-danger 1.6s ease-out infinite; }
+
+/* ── Landing page type scope ─────────────────────────────────────────────
+   The marketing page uses a different voice than the product UI: Fraunces
+   for display headlines, Inter for body, JetBrains Mono for telemetry.
+   Scoped to .landing-root (not :root) so the dashboard/report pages keep
+   their existing Geist + SFMono stack untouched. Font families come from
+   next/font CSS variables declared in layout.tsx.                         */
+.landing-root {
+  --font-sans:  var(--font-inter), system-ui, sans-serif;
+  --font-serif: var(--font-fraunces), Georgia, serif;
+  --font-mono:  var(--font-jetbrains), ui-monospace, monospace;
+
+  font-family: var(--font-sans);
+}
+
+.landing-root .font-mono  { font-family: var(--font-mono); }
+.landing-root .font-serif { font-family: var(--font-serif); }
+.landing-root .font-sans  { font-family: var(--font-sans); }
+
+/* premium serif display for hero headlines */
+.landing-root .display {
+  font-family: var(--font-serif);
+  font-optical-sizing: auto;
+  letter-spacing: -0.02em;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html { scroll-behavior: smooth; }
+}
+

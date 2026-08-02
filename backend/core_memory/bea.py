@@ -54,15 +54,28 @@ class BehavioralEventAccumulator:
         if candidate_id not in self.memory:
             self.memory[candidate_id] = self._fresh_state()
 
-    async def record_critical_signal(self, candidate_id: str, is_critical: bool, reason: str = "") -> dict:
+    async def record_critical_signal(
+        self,
+        candidate_id: str,
+        is_critical: bool,
+        reason: str = "",
+        instant: bool = False,
+    ) -> dict:
         """Rolling 3-of-5 critical buffer. Filters single-frame anomalies (lighting glitches,
         someone walking past briefly) from sustained violations (real phone, real second person).
 
+        `instant=True` bypasses the buffer and confirms on this frame alone. Use it for
+        unambiguous physical evidence — a phone in shot is a phone in shot, and at a 5s
+        frame cadence the 3-of-5 window meant ~15 seconds of holding it before anything
+        registered. Ambiguous, transient signals (face briefly lost, someone crossing
+        behind) still go through the buffer, where the debounce genuinely earns its keep.
+
         Returns:
             {confirmed, count, threshold, window, pending_reasons}
-            confirmed=True means caller should engage `trigger_fatal_lockout`.
+            confirmed=True means the caller should log the violation.
         """
         async with self.lock:
+
             await self._ensure_candidate(candidate_id)
             state = self.memory[candidate_id]
             state["last_activity"] = time.time()
@@ -82,6 +95,19 @@ class BehavioralEventAccumulator:
                 state["pending_critical_reasons"] = []
 
             count = sum(1 for v in state["critical_buffer"] if v)
+
+            if instant and is_critical:
+                # Report the window honestly as 1-of-1 so the UI doesn't render a
+                # "2/3" progress label for something that was already decided.
+                return {
+                    "confirmed": True,
+                    "count": 1,
+                    "threshold": 1,
+                    "window": 1,
+                    "instant": True,
+                    "pending_reasons": [reason] if reason else list(state["pending_critical_reasons"]),
+                }
+
             confirmed = count >= CRITICAL_THRESHOLD
 
             return {
@@ -89,17 +115,56 @@ class BehavioralEventAccumulator:
                 "count": count,
                 "threshold": CRITICAL_THRESHOLD,
                 "window": CRITICAL_BUFFER_SIZE,
+                "instant": False,
                 "pending_reasons": list(state["pending_critical_reasons"])
+            }
+
+    async def record_violation(self, candidate_id: str, reason: str = "") -> dict:
+        """Log a confirmed critical violation and return a max-risk packet WITHOUT
+        latching the session shut.
+
+        `trigger_fatal_lockout` sets is_locked, and every later `record_telemetry`
+        call short-circuits on that flag — so the first phone sighting froze gaze
+        tracking for the rest of the interview and the final report had nothing to
+        show after that point. The violation still needs recording; it just must not
+        take the session down with it. The flag is permanent in `critical_flags`, so
+        the verdict page can still report it.
+        """
+        async with self.lock:
+            await self._ensure_candidate(candidate_id)
+            state = self.memory[candidate_id]
+            state["last_activity"] = time.time()
+
+            if reason and reason not in state["critical_flags"]:
+                state["critical_flags"].append(reason)
+
+            # Counts as a hard event so risk stays elevated after the object leaves.
+            state["events"].append(time.time())
+
+            return {
+                "candidate_id": candidate_id,
+                "risk_score": 100,
+                "violation_count": len(state["events"]),
+                "critical_flags": list(state["critical_flags"]),
+                "intervention_level": "SEVERE_VIOLATION_LOGGED",
+                "is_locked": False,
+                "autopsy_flag": True,
             }
 
     async def trigger_fatal_lockout(self, candidate_id: str, reason: str = "") -> dict:
         """Logs a fatal-level violation silently (Mobile Phone / Tab Switch).
-        Changes state to locked so it permanently stays locked until reset."""
+        Changes state to locked so it permanently stays locked until reset.
+
+        Retained for callers that genuinely want to end a session. The live
+        interview path uses `record_violation` instead, so a flag no longer
+        blinds the remainder of the run.
+        """
         async with self.lock:
             await self._ensure_candidate(candidate_id)
             self.memory[candidate_id]["is_locked"] = True
             self.memory[candidate_id]["critical_flags"].append(reason)
             return self._generate_locked_state(candidate_id)
+
 
     # --- Wall-clock tiered telemetry (replaces frame-counted heuristic) ---
     async def record_telemetry(self, candidate_id: str, gaze: str) -> dict:

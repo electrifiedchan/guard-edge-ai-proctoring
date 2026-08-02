@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import DashboardButton from "@/components/DashboardButton";
+
 
 interface AutopsyLog {
   id: number;
@@ -63,12 +65,16 @@ export default function AutopsyPage() {
     <main className="min-h-screen bg-[var(--color-canvas)] text-[var(--color-parchment)] font-mono p-8 flex flex-col items-center">
       {/* --- HEADER --- */}
       <header className="w-full max-w-[1400px] mb-12 border-b border-[var(--color-hairline)] pb-8">
-        <div className="flex items-center gap-3 mb-2">
-          <span className="w-2 h-2 rounded-full bg-[var(--color-danger)] pulse-danger" />
-          <span className="eyebrow text-[var(--color-danger)]">
-            CLASSIFICATION: RESTRICTED
-          </span>
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <div className="flex items-center gap-3">
+            <span className="w-2 h-2 rounded-full bg-[var(--color-danger)] pulse-danger" />
+            <span className="eyebrow text-[var(--color-danger)]">
+              CLASSIFICATION: RESTRICTED
+            </span>
+          </div>
+          <DashboardButton />
         </div>
+
         <h1 className="font-display text-4xl md:text-5xl font-semibold text-[var(--color-snow)] leading-tight">
           Guard Evidence Autopsy
         </h1>

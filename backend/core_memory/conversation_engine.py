@@ -1,5 +1,4 @@
-"""Conversation Engine — Stateful multi-turn AI interviewer with progressive personas."""
-
+"""Conversation Engine — Stateful multi-turn AI interviewer with progressive personas.""" 
 import os
 import re
 import json
@@ -40,6 +39,12 @@ class InterviewSession:
     focus_scores: list[float] = field(default_factory=list)
     is_complete: bool = False
     max_turns: int = 8
+    created_at: float = field(default_factory=time.time)
+
+
+# Finished sessions linger so late-arriving turns don't 404, but they hold a
+# full transcript plus resume text, so they can't linger forever.
+SESSION_TTL_SEC = 60 * 60
 
 
 PERSONA_SYSTEM_PROMPTS = {
@@ -75,12 +80,53 @@ PERSONA_TRANSITION_INSTRUCTIONS = {
 }
 
 
+# Cloud inference is the dominant cost in every turn and in the final report,
+# so these are tuned deliberately:
+#   VERDICT_MAX_TOKENS — the report prompt asks for 4 short paragraphs (~250
+#     tokens). It used to allow 800, and since tokens are produced serially,
+#     that headroom was pure wait time on the "generating report" spinner.
+#   *_TIMEOUT — the OpenAI SDK defaults to 600s. Without an explicit timeout a
+#     queued upstream request looks like a frozen app. Better to fail fast and
+#     fall back to the deterministic report than to hang.
+VERDICT_MAX_TOKENS = 420
+VERDICT_TIMEOUT_SEC = 45.0
+TURN_TIMEOUT_SEC = 20.0
+
+
 class ConversationEngine:
     def __init__(self):
         self.sessions: dict[str, InterviewSession] = {}
         self.nvidia_api_key = os.getenv("NVIDIA_API_KEY", "")
+        self._client: AsyncOpenAI | None = None
+
+    def _llm(self) -> AsyncOpenAI:
+        """One shared client for the process.
+
+        Previously every call site built its own AsyncOpenAI, which meant a new
+        TLS handshake and connection pool for each interviewer turn and again
+        for the final report. Reusing one client keeps the connection warm, so
+        subsequent calls skip setup entirely.
+        """
+        if self._client is None:
+            self._client = AsyncOpenAI(
+                base_url="https://integrate.api.nvidia.com/v1",
+                api_key=self.nvidia_api_key,
+            )
+        return self._client
+
+    def _prune_sessions(self) -> None:
+        """Drop sessions past their TTL. Called on create so the dict can't
+
+        grow without bound across a long-running server."""
+        cutoff = time.time() - SESSION_TTL_SEC
+        stale = [sid for sid, s in self.sessions.items() if s.created_at < cutoff]
+        for sid in stale:
+            del self.sessions[sid]
+        if stale:
+            logger.info(f"Pruned {len(stale)} expired interview session(s)")
 
     async def create_session(self, resume_text: str, questions: list[dict]) -> dict:
+        self._prune_sessions()
         session_id = uuid.uuid4().hex[:12]
         session = InterviewSession(
             session_id=session_id,
@@ -198,24 +244,27 @@ Write a coaching report in exactly 4 short paragraphs:
 Write in 2nd person ("You did well when..."). Be warm but honest. No bullet points, no headers — just flowing paragraphs."""
 
         try:
-            client = AsyncOpenAI(
-                base_url="https://integrate.api.nvidia.com/v1",
-                api_key=self.nvidia_api_key,
-            )
-            completion = await client.chat.completions.create(
+            t_start = time.time()
+            completion = await self._llm().chat.completions.create(
                 model="meta/llama-3.1-8b-instruct",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
-                max_tokens=800,
+                max_tokens=VERDICT_MAX_TOKENS,
+                timeout=VERDICT_TIMEOUT_SEC,
             )
             report = completion.choices[0].message.content.strip()
+            logger.info(f"📋 Report generated in {time.time() - t_start:.1f}s")
         except Exception as e:
             logger.error(f"Verdict generation failed: {e}", exc_info=True)
+
             report = "We encountered an issue generating your detailed feedback. Based on the interview, you showed solid engagement. Keep practicing with the STAR method to strengthen your responses."
 
-        # Clean up session
-        del self.sessions[session_id]
-
+        # Keep the session alive — deleting it here created a race: if
+        # handleSpeechEnd fires one more VAD callback after the verdict
+        # endpoint returns (stopListening is not atomic across the wire),
+        # the turn would land on a missing session and throw a 404. The
+        # is_complete flag already gates process_candidate_turn, so the
+        # session can safely stay until the engine restarts.
         return {
             "report": report,
             "focus_score": round(avg_focus, 1),
@@ -300,19 +349,17 @@ Interview topics to weave in naturally (don't read verbatim — adapt to convers
             messages.append({"role": role, "content": turn.content})
 
         try:
-            client = AsyncOpenAI(
-                base_url="https://integrate.api.nvidia.com/v1",
-                api_key=self.nvidia_api_key,
-            )
-            completion = await client.chat.completions.create(
+            completion = await self._llm().chat.completions.create(
                 model="meta/llama-3.1-8b-instruct",
                 messages=messages,
                 temperature=0.75,
                 max_tokens=200,
+                timeout=TURN_TIMEOUT_SEC,
             )
             return completion.choices[0].message.content.strip()
         except Exception as e:
             logger.error(f"Conversation response failed: {e}", exc_info=True)
+
             return "That's interesting. Could you tell me a bit more about your approach there?"
 
     async def _generate_wrap_up(self, session: InterviewSession) -> str:
@@ -323,19 +370,17 @@ Keep it natural and encouraging."""
 
     async def _call_llm(self, prompt: str) -> str:
         try:
-            client = AsyncOpenAI(
-                base_url="https://integrate.api.nvidia.com/v1",
-                api_key=self.nvidia_api_key,
-            )
-            completion = await client.chat.completions.create(
+            completion = await self._llm().chat.completions.create(
                 model="meta/llama-3.1-8b-instruct",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
                 max_tokens=150,
+                timeout=TURN_TIMEOUT_SEC,
             )
             return completion.choices[0].message.content.strip()
         except Exception as e:
             logger.error(f"LLM call failed: {e}", exc_info=True)
+
             return "Thanks for sharing that. Let's continue — tell me more about your experience."
 
 

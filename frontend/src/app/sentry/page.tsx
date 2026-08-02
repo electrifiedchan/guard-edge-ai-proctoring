@@ -3,10 +3,11 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Square, User, Bot, Shield } from "lucide-react";
+import { User, Bot } from "lucide-react";
 import SniperScope, { RiskPacket, SniperScopeHandle } from "@/components/SniperScope";
 import VoiceOrb, { VoiceState } from "@/components/VoiceOrb";
 import LoadingOverlay from "@/components/LoadingOverlay";
+import DashboardButton from "@/components/DashboardButton";
 import { useVAD } from "@/hooks/useVAD";
 
 type ChatMessage = {
@@ -50,6 +51,13 @@ export default function SentryPage() {
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const interviewStartedRef = useRef(false);
+  /**
+   * Latched once the interview is wrapping up. stopListening() can't retract a
+   * recording the VAD has already captured, so without this a final blob would
+   * still POST a turn — landing on a session the backend has closed and
+   * surfacing a "Session not found" error over the finished report.
+   */
+  const sessionEndingRef = useRef(false);
 
   // VAD hook
   const { isVoiceActive, audioLevel, startListening, stopListening } = useVAD({
@@ -62,11 +70,11 @@ export default function SentryPage() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatHistory]);
 
-  // Redirect if no session data
+  // Redirect if no session data. Identity resolution used to live here too;
+  // DashboardButton owns that now, so this effect is back to one job.
   useEffect(() => {
-    const sessionData = sessionStorage.getItem("guard_session");
-    if (!sessionData) {
-      router.push("/");
+    if (!sessionStorage.getItem("guard_session")) {
+      router.push("/upload");
     }
   }, [router]);
 
@@ -114,6 +122,13 @@ export default function SentryPage() {
     setChatHistory([]);
   }, [stopListening]);
 
+  // Always points at the current render's startInterviewFlow. handleTelemetry
+  // must keep a stable identity (SniperScope binds it once), but with empty
+  // deps it froze render 1's startInterviewFlow — which closed over render 1's
+  // startListening. After a Disengage/Engage cycle that stale mic handle was
+  // dead, so re-engaging never restarted the interview.
+  const startInterviewFlowRef = useRef<() => void>(() => {});
+
   // SniperScope telemetry — first callback means sentry is live → start interview
   const handleTelemetry = useCallback((packet: RiskPacket, verdict: string) => {
     setRiskScore(packet.risk_score);
@@ -123,7 +138,7 @@ export default function SentryPage() {
     if (!interviewStartedRef.current) {
       interviewStartedRef.current = true;
       setLiveTranscript("SENTRY ENGAGED. INITIATING INTERVIEW SEQUENCE…");
-      startInterviewFlow();
+      startInterviewFlowRef.current();
     }
   }, []);
 
@@ -164,11 +179,21 @@ export default function SentryPage() {
       console.error("Session start failed:", err);
       setError("Failed to start interview session. Check backend.");
       setLiveTranscript("ERROR: BACKEND UNREACHABLE.");
+      // Let a retry actually re-run this; otherwise the guard stays latched
+      // and Engage does nothing on the second attempt.
+      interviewStartedRef.current = false;
+      setInterviewActive(false);
     }
   }, [speakText, startListening]);
 
+  startInterviewFlowRef.current = startInterviewFlow;
+
   // VAD speech end
   async function handleSpeechEnd(blob: Blob) {
+    // The run is over (or never legitimately started) — discard the audio
+    // instead of transcribing it and posting a turn nobody is listening for.
+    if (sessionEndingRef.current || !sessionIdRef.current) return;
+
     setTurnState("processing");
     setIsTranscribing(true);
     setLiveTranscript("TRANSCRIBING AUDIO…");
@@ -248,6 +273,7 @@ export default function SentryPage() {
 
   // End session → navigate to report
   const endSession = useCallback(async () => {
+    sessionEndingRef.current = true;
     setIsGenerating(true);
     stopListening();
     window.speechSynthesis?.cancel();
@@ -313,13 +339,28 @@ export default function SentryPage() {
             </span>
           )}
 
+          {/* Gated on sessionId, not interviewActive. Disengage sets
+              interviewActive=false, which used to disable this button and
+              stranded a finished session with no way to generate its report.
+              A session that has started can always be ended.
+
+              Now the danger tone, not signal green: "End session" is a
+              destructive/terminal action, so painting it the same emerald as
+              every affirmative CTA read as "go" when it means "stop". */}
           <button
             onClick={() => endSession()}
-            disabled={isGenerating || !interviewActive}
-            className="h-9 px-4 rounded-md bg-[var(--color-signal)] text-[var(--color-canvas)] text-[12px] font-semibold hover:bg-[var(--color-iris-hover)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+            disabled={isGenerating || !sessionId}
+            className="h-9 px-4 rounded-md bg-[var(--color-danger)] text-white text-[12px] font-semibold hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
           >
             {isGenerating ? "Analyzing…" : "End session · generate report"}
           </button>
+
+          {/* Profile chip is deliberately the last, rightmost element with a
+              divider before it, so the coloured avatar owns the corner and
+              stays visually separate from the status pills and the End action
+              rather than mingling in the row. */}
+          <span aria-hidden="true" className="mx-1 h-6 w-px bg-[var(--color-hairline)]" />
+          <DashboardButton />
         </div>
       </header>
 
@@ -333,7 +374,7 @@ export default function SentryPage() {
         {/* Right sidebar — VoiceOrb + Transcript/Chat */}
         <div className="flex-shrink-0 flex flex-col gap-3 w-full xl:w-[420px] h-full overflow-hidden">
           {/* VoiceOrb — driven by interview turn state */}
-          <VoiceOrb externalState={orbState} />
+          <VoiceOrb externalState={orbState} level={audioLevel} voiceActive={isVoiceActive} />
 
           {/* Live transcript / Chat panel */}
           <div className="lift-1 rounded-lg p-4 flex flex-col flex-1 min-h-0 relative overflow-hidden">
@@ -403,28 +444,9 @@ export default function SentryPage() {
             )}
           </div>
 
-          {/* Audio level indicator during listening */}
-          {turnState === "listening" && (
-            <div className="lift-1 rounded-lg px-5 py-3 flex items-center justify-center gap-3">
-              <div className="flex items-center gap-1 h-6">
-                {Array.from({ length: 10 }).map((_, i) => (
-                  <motion.div
-                    key={i}
-                    className="w-1 rounded-full bg-[var(--color-signal)]"
-                    animate={{
-                      height: isVoiceActive
-                        ? `${Math.max(4, audioLevel * 24 * (0.5 + Math.random() * 0.5))}px`
-                        : "4px",
-                    }}
-                    transition={{ duration: 0.1 }}
-                  />
-                ))}
-              </div>
-              <span className="text-[10px] text-[var(--color-slate)] uppercase tracking-wider">
-                {isVoiceActive ? "Speaking detected" : "Waiting for voice…"}
-              </span>
-            </div>
-          )}
+          {/* The separate level-bar panel used to live here. It duplicated what
+              the waveform now shows (and half its bar heights were Math.random
+              rather than signal), so the orb carries mic level and VAD gating. */}
         </div>
       </div>
 

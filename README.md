@@ -39,6 +39,8 @@ All of it runs **entirely on your own machine**. **No video ever leaves the devi
 | 🛡️ **Resilience Score** | How often composure dipped — and how fast you bounced back. |
 | 📊 **Progress Trajectory** | Composure, eye contact, and resilience trends across sessions. |
 | 🔍 **Evidence Trail** | Flagged moments store one frame on disk with a SQLite audit trail. |
+| 🧭 **Nothing Unexplained** | A guided tour on first visit, plus a **?** on every panel that says what the number means and what to do about it. No chart is left for you to guess at. |
+
 
 ---
 
@@ -92,25 +94,26 @@ flowchart TB
 ## 🚀 Quick Start
 
 ```bash
-git clone https://gitlab.com/mmnirupam-group/guard-edge-ai-proctoring.git
+git clone https://github.com/electrifiedchan/guard-edge-ai-proctoring.git
 cd guard-edge-ai-proctoring
 
 # Backend
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 export LLM_MODE=ollama OLLAMA_MODEL=llama3.1:8b      # or LLM_MODE=nvidia + NVIDIA_API_KEY
-uvicorn backend.edge_main:app --port 8000
+uvicorn backend.edge_main:app --port 8080
 
 # Frontend (new terminal)
 cd frontend && pnpm install
-echo "NEXT_PUBLIC_API_BASE=http://localhost:8000" > .env.local
+echo "NEXT_PUBLIC_API_BASE=http://localhost:8080" > .env.local
 pnpm dev
 ```
 
 Open **http://localhost:3000** → allow camera + mic → upload a resume → practice.
-Then **/replay** for the Composure Curve, **/progress** after a few sessions.
+Then **/replay** for the Composure Curve, **/report** for the coach report, **/dashboard** for progress.
 
-> Windows one-shot: `startapp.bat` · Containers: `docker-compose up`
+> Windows one-shot: `startapp.bat` (backend on 8080, frontend on 3000) · Containers: `docker-compose up`
+
 
 ---
 
@@ -118,10 +121,14 @@ Then **/replay** for the Composure Curve, **/progress** after a few sessions.
 
 | Route | Purpose |
 |---|---|
-| `/` | Live dashboard — camera + overlay, interviewer panel, live nudges |
+| `/` | Landing page — what G.U.A.R.D. is, in one scroll |
+| `/dashboard` | Your practice home — readiness ring, composure trend, streak, focus areas, past sessions. Append `?demo=1` to preview it with sample data. First visit runs a short guided tour, and every panel has a **?** that explains what you're looking at |
+| `/upload` | Drop in a resume → tailored question plan |
+| `/practice` · `/sentry` | Live session — camera + overlay, conversational interviewer, live nudges |
 | `/replay` | Composure Curve scrubber, key moments, resilience score, headline insight |
-| `/progress` | Session-over-session trajectory |
-| `/autopsy` · `/verdict` | Forensic deep-dive + AI coach report |
+| `/report` · `/verdict` | AI coach report + grouped anomalies with frame evidence |
+| `/autopsy` | Forensic deep-dive |
+
 
 <details>
 <summary><b>Full API reference</b></summary>

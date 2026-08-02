@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import ViolationCard from "@/components/ViolationCard";
+import FrameReview from "@/components/verdict/FrameReview";
+import DashboardButton from "@/components/DashboardButton";
 import { VIOLATION_TEMPLATES, type SessionBreakdown, type ViolationType } from "@/lib/violation-templates";
 
 interface VerdictData {
@@ -30,7 +31,7 @@ export default function VerdictPage() {
     if (data) {
       setVerdictData(JSON.parse(data));
     } else {
-      router.push("/");
+      router.push("/upload");
     }
   }, [router]);
 
@@ -64,9 +65,12 @@ export default function VerdictPage() {
           transition={{ duration: 0.4 }}
           className="flex flex-col gap-3 pb-7 border-b border-[var(--color-hairline)]"
         >
-          <div className="flex items-center gap-2.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-iris)] pulse-iris" />
-            <span className="eyebrow">Session complete · coaching report</span>
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-center gap-2.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-iris)] pulse-iris" />
+              <span className="eyebrow">Session complete · coaching report</span>
+            </div>
+            <DashboardButton />
           </div>
           <h1 className="font-display text-[36px] md:text-[44px] font-semibold text-[var(--color-snow)] leading-[1.05]">
             Here&apos;s what we noticed,
@@ -168,11 +172,11 @@ export default function VerdictPage() {
             <div className="flex flex-col gap-1">
               <span className="eyebrow">Detailed breakdown</span>
               <h2 className="font-display text-[22px] font-semibold text-[var(--color-snow)]">
-                Every pattern we logged, with the fix.
+                Every pattern we logged, with the frame that caught it.
               </h2>
             </div>
             <span className="font-mono text-[11px] text-[var(--color-fog)]">
-              sorted by peak risk
+              pick a pattern · sorted by peak risk
             </span>
           </div>
 
@@ -184,11 +188,9 @@ export default function VerdictPage() {
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {violationEntries.map(([type, bucket], idx) => (
-                <ViolationCard key={type} type={type} bucket={bucket} index={idx} />
-              ))}
-            </div>
+            /* Was a 2-col grid of cards where the evidence frame was a 48px
+               thumbnail at the bottom. The frame is the proof, so it leads now. */
+            <FrameReview entries={violationEntries} />
           )}
         </section>
 
@@ -202,11 +204,13 @@ export default function VerdictPage() {
           <span className="font-mono text-[11px] text-[var(--color-fog)]">
             Local · 127.0.0.1 · session report
           </span>
+          {/* The dashboard hop now lives in the header chip, so the footer keeps
+              only the forward action: go run it again. */}
           <button
-            onClick={() => router.push("/")}
+            onClick={() => router.push("/upload")}
             className="h-9 px-4 rounded-md bg-[var(--color-iris)] text-white text-[12px] font-medium hover:bg-[var(--color-iris-hover)] active:bg-[var(--color-iris-press)] transition-colors cursor-pointer"
           >
-            Return to dashboard
+            Run another session
           </button>
         </motion.div>
       </div>

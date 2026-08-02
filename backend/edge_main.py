@@ -26,6 +26,7 @@ from core_memory.timeline import (
     insert_frame,
     insert_moment,
     get_timeline,
+    get_dashboard_summary,
 )
 from core_memory.voice_engine import transcribe_audio as whisper_transcribe
 import voice_engine
@@ -95,7 +96,28 @@ import torch
 device = "cuda" if torch.cuda.is_available() else "cpu"
 yolo_model = YOLO("yolov8s.pt")
 yolo_model.to(device)
-logger.info(f"🔫 YOLOv8s loaded on {device.upper()}")
+
+# COCO class ids we actually care about.
+#   0  person     — a second person in shot
+#   67 cell phone — the headline cheat signal
+#   73 book       — notes on the desk
+# The detector was previously restricted to [0, 67], which quietly made the
+# "prohibited item" branch in determine_verdict dead code: it tested for book
+# and laptop, neither of which YOLO was ever asked to find.
+#
+# 63 (laptop) is deliberately NOT on by default. Plenty of candidates sit at a
+# desk with a second machine visible, and flagging that as cheating is a false
+# accusation. Opt in with BEA_WATCH_LAPTOP=true where the setup warrants it.
+YOLO_WATCH_CLASSES = [0, 67, 73]
+if os.getenv("BEA_WATCH_LAPTOP", "false").lower() == "true":
+    YOLO_WATCH_CLASSES.append(63)
+
+# Confidence floor. High enough that a single frame is trustworthy evidence,
+# which is what lets object criticals skip the 3-of-5 debounce.
+YOLO_CONF = float(os.getenv("BEA_YOLO_CONF", "0.65"))
+
+logger.info(f"🔫 YOLOv8s loaded on {device.upper()} | classes={YOLO_WATCH_CLASSES} conf={YOLO_CONF}")
+
 
 
 # ---------------------------------------------------------------------------
@@ -120,22 +142,40 @@ def write_evidence_frame(session_id: str, image_base64: str) -> str | None:
 # Verdict logic (unchanged)
 # ---------------------------------------------------------------------------
 def determine_verdict(detected_objects: list, faces: int, talking: bool, head_pose: str):
+    """Returns (gaze, is_critical, critical_kind, verdict, logic_trace).
+
+    `critical_kind` splits criticals by how much a single frame can be trusted:
+      "object"    — a phone/book/laptop is physically in shot. YOLO is running at
+                    conf>=0.65 on a specific class, so one frame is proof. Flag now.
+      "transient" — face lost or an extra face. Genuinely noisy: a shadow, a lean
+                    out of frame, or someone crossing behind all trip it, so these
+                    keep the 3-of-5 debounce.
+
+    Object detection is checked BEFORE face count. A candidate raising a phone
+    usually occludes or turns their face at the same moment, so a face-first
+    ordering reported "face not visible" and the phone never surfaced.
+    """
     is_critical = False
+    critical_kind = None
     gaze = "STRAIGHT"
     verdict = "Candidate is fully engaged and attentive."
 
-    if faces == 0:
+    if any("cell phone" in obj.lower() for obj in detected_objects):
         is_critical = True
-        verdict = "CRITICAL: Candidate face not visible or obscured."
-    elif faces > 1:
-        is_critical = True
-        verdict = "CRITICAL: Multiple persons detected in frame."
-    elif any("cell phone" in obj.lower() for obj in detected_objects):
-        is_critical = True
+        critical_kind = "object"
         verdict = "CRITICAL: Mobile device detected in frame."
     elif any("book" in obj.lower() or "laptop" in obj.lower() for obj in detected_objects):
         is_critical = True
+        critical_kind = "object"
         verdict = "CRITICAL: Prohibited item detected on desk."
+    elif faces == 0:
+        is_critical = True
+        critical_kind = "transient"
+        verdict = "CRITICAL: Candidate face not visible or obscured."
+    elif faces > 1:
+        is_critical = True
+        critical_kind = "transient"
+        verdict = "CRITICAL: Multiple persons detected in frame."
     elif head_pose in ["HEAD_LEFT", "HEAD_RIGHT", "HEAD_UP"]:
         gaze = "SIDE_OR_UP"
         direction = head_pose.replace("HEAD_", "").lower()
@@ -151,7 +191,7 @@ def determine_verdict(detected_objects: list, faces: int, talking: bool, head_po
         f"Objects: {detected_objects or 'None'} | Faces: {faces} "
         f"| Pose: {head_pose} | Talking: {talking}"
     )
-    return gaze, is_critical, verdict, logic_trace
+    return gaze, is_critical, critical_kind, verdict, logic_trace
 
 
 # ---------------------------------------------------------------------------
@@ -179,17 +219,20 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
         f"Faces: {payload.faces_detected}, Pose: '{payload.head_pose}', Talking: {payload.is_talking}"
     )
 
-    # Use candidate_id as the session_id when no explicit session is provided
+    # Two different grains, deliberately kept separate:
+    #   candidate_id -> BEA identity (lockout//status/reset all key on this)
+    #   session_id   -> analytics grain, one row per practice run (dashboard trends)
+    # Falls back to candidate_id so older clients that don't send one still work.
     session_id = payload.session_id or payload.candidate_id
+    bea_key = payload.candidate_id
 
-    current_state = await bea_engine.get_state(session_id)
-    if current_state.get("intervention_level") == "SEVERE_VIOLATION_LOGGED":
-        return {
-            "candidate_id": payload.candidate_id,
-            "timestamp": payload.timestamp,
-            "verdict": "SESSION FLAGGED",
-            "risk_packet": current_state,
-        }
+    # NOTE: deliberately no early-return on a prior SEVERE_VIOLATION_LOGGED.
+    # This used to bail out here, which meant the first confirmed flag stopped
+    # all further analysis: no more frames written, no gaze tracking, and the
+    # final report showed nothing after that instant. A flag is recorded and
+    # surfaced, but the session keeps running so the candidate still gets a
+    # complete timeline and verdict.
+
 
     # --- PHASE 1: Decode image ---
     raw_b64 = payload.image_base64
@@ -207,7 +250,10 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
     loop = asyncio.get_running_loop()
     results = await loop.run_in_executor(
         app.state.executor,
-        lambda: yolo_model(image, verbose=False, classes=[0, 67], imgsz=640, augment=False, conf=0.65),
+        lambda: yolo_model(
+            image, verbose=False, classes=YOLO_WATCH_CLASSES,
+            imgsz=640, augment=False, conf=YOLO_CONF,
+        ),
     )
     detected_objects = []
     for r in results:
@@ -219,7 +265,7 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
     logger.info(f"🔫 YOLO: {detected_objects or 'Nothing detected'}")
 
     # --- PHASE 3: Deterministic verdict ---
-    gaze, is_critical, verdict, logic_trace = determine_verdict(
+    gaze, is_critical, critical_kind, verdict, logic_trace = determine_verdict(
         detected_objects=detected_objects,
         faces=payload.faces_detected,
         talking=payload.is_talking,
@@ -228,19 +274,29 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
 
     # --- PHASE 4: BEA temporal graph ---
     if is_critical:
-        decision = await bea_engine.record_critical_signal(session_id, True, verdict)
+        # A visible object is proof on sight; ambiguous signals keep the debounce.
+        instant = critical_kind == "object"
+        decision = await bea_engine.record_critical_signal(
+            bea_key, True, verdict, instant=instant
+        )
         if decision["confirmed"]:
             consolidated = "; ".join(decision["pending_reasons"]) or verdict
-            risk_packet = await bea_engine.trigger_fatal_lockout(session_id, reason=consolidated)
-            verdict = f"CONFIRMED ({decision['count']}/{decision['threshold']}): {consolidated}"
+            # record_violation, not trigger_fatal_lockout: the flag must be logged
+            # without latching the session shut for every subsequent frame.
+            risk_packet = await bea_engine.record_violation(bea_key, reason=consolidated)
+            verdict = (
+                f"CONFIRMED: {consolidated}"
+                if decision.get("instant")
+                else f"CONFIRMED ({decision['count']}/{decision['threshold']}): {consolidated}"
+            )
         else:
-            risk_packet = await bea_engine.record_telemetry(session_id, "SIDE_OR_UP")
+            risk_packet = await bea_engine.record_telemetry(bea_key, "SIDE_OR_UP")
             risk_packet["critical_pending"] = decision["count"]
             risk_packet["critical_threshold"] = decision["threshold"]
             verdict = f"⚠️ ANOMALY {decision['count']}/{decision['threshold']}: {verdict}"
     else:
-        await bea_engine.record_critical_signal(session_id, False, "")
-        risk_packet = await bea_engine.record_telemetry(session_id, gaze)
+        await bea_engine.record_critical_signal(bea_key, False, "")
+        risk_packet = await bea_engine.record_telemetry(bea_key, gaze)
 
     # --- PHASE 5: MR 1 — persist to timeline_frames ---
     risk_score: int = risk_packet.get("risk_score", 0)
@@ -307,6 +363,25 @@ async def get_session_timeline(session_id: str):
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/dashboard/summary  — MR 3: cross-session practice dashboard
+# ---------------------------------------------------------------------------
+@app.get("/api/v1/dashboard/summary")
+async def get_dashboard_summary_endpoint(candidate_id: str | None = None, days: int = 84):
+    """Cross-session aggregates for the MR-3 practice dashboard.
+
+    Returns the full contract (candidate, totals, readiness, metrics,
+    composure_trend, activity, recent_sessions, focus_area). A brand-new
+    candidate with zero sessions gets the same shape with zeros/nulls — never
+    a 404.
+    """
+    try:
+        return get_dashboard_summary(candidate_id=candidate_id, days=days)
+    except Exception as e:
+        logger.error(f"❌ Dashboard summary error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to compute dashboard summary.")
+
+
+# ---------------------------------------------------------------------------
 # Voice status
 # ---------------------------------------------------------------------------
 @app.get("/api/v1/voice-status")
@@ -317,15 +392,37 @@ async def get_voice_status():
 # ---------------------------------------------------------------------------
 # Session breakdown (kept for verdict page compatibility)
 # ---------------------------------------------------------------------------
+# Predicates take a whole telemetry-frame row so we can bucket everything the
+# stored schema actually carries — not just gaze. faces_detected and is_talking
+# are persisted per frame, so NO_FACE / MULTIPLE_FACES / TALKING are all
+# reconstructable here. MOBILE_DEVICE / PROHIBITED_ITEM stay False because YOLO
+# object labels aren't persisted per frame; those are derived from the flagged
+# moments' captions instead (see _classify_moment_caption below).
 VIOLATION_TYPES = {
-    "DOWN_GAZE":       lambda gaze, pose: gaze == "DOWN",
-    "SIDE_GAZE":       lambda gaze, pose: gaze == "SIDE_OR_UP",
-    "MOBILE_DEVICE":   lambda gaze, pose: False,   # YOLO trace not stored in new schema
-    "PROHIBITED_ITEM": lambda gaze, pose: False,
-    "MULTIPLE_FACES":  lambda gaze, pose: False,
-    "NO_FACE":         lambda gaze, pose: False,
-    "TALKING":         lambda gaze, pose: False,
+    "DOWN_GAZE":       lambda row: (row.get("gaze") or "") == "DOWN",
+    "SIDE_GAZE":       lambda row: (row.get("gaze") or "") == "SIDE_OR_UP",
+    "MOBILE_DEVICE":   lambda row: False,
+    "PROHIBITED_ITEM": lambda row: False,
+    "MULTIPLE_FACES":  lambda row: (row.get("faces_detected") or 0) >= 2,
+    "NO_FACE":         lambda row: (row.get("faces_detected") or 0) == 0,
+    "TALKING":         lambda row: bool(row.get("is_talking")),
 }
+
+
+def _classify_moment_caption(caption: str) -> str | None:
+    """Map a flagged moment's verdict text to an object-violation type.
+
+    YOLO labels aren't stored per frame, so phone/book criticals can't be
+    rebuilt from timeline_frames. Their verdict text is preserved in the
+    moment caption, which is enough to attribute the captured JPEG.
+    """
+    c = (caption or "").lower()
+    if "mobile" in c or "phone" in c:
+        return "MOBILE_DEVICE"
+    if "book" in c or "laptop" in c:
+        return "PROHIBITED_ITEM"
+    return None
+
 
 INFERENCE_CADENCE_SEC = 5
 
@@ -336,7 +433,13 @@ VIOLATION_LABELS = {
 
 
 def _compute_session_breakdown(session_id: str, since_iso: str | None = None) -> dict:
-    """Derive a violation breakdown from timeline_frames."""
+    """Derive a violation breakdown from timeline_frames.
+
+    Accepts either a candidate_id or a concrete per-run session_id: frames are
+    now stored under "{candidate_id}__{rand}", so an exact match alone would
+    miss everything. Prefix-matching keeps the verdict page working across
+    both the old (session_id == candidate_id) and new per-run schemes.
+    """
     import contextlib
     from core_memory.timeline import _db
     from datetime import datetime
@@ -346,8 +449,22 @@ def _compute_session_breakdown(session_id: str, since_iso: str | None = None) ->
         rows = [
             dict(r)
             for r in conn.execute(
-                "SELECT * FROM timeline_frames WHERE session_id = ? ORDER BY t",
-                (session_id,),
+                "SELECT * FROM timeline_frames "
+                "WHERE (session_id = ? OR session_id LIKE ?) ORDER BY t",
+                (session_id, f"{session_id}__%"),
+            )
+        ]
+        # Flagged moments carry the captured JPEG (evidence_url) and the verdict
+        # text (caption). timeline_frames has no image column, so this is the
+        # only place the proof lives — the breakdown must read it to have any
+        # frame to show. Keyed by rounded timestamp so we can attribute each
+        # captured image back to the frame that triggered it.
+        moment_rows = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT t, type, caption, evidence_url FROM moments "
+                "WHERE (session_id = ? OR session_id LIKE ?) ORDER BY t",
+                (session_id, f"{session_id}__%"),
             )
         ]
 
@@ -356,30 +473,40 @@ def _compute_session_breakdown(session_id: str, since_iso: str | None = None) ->
         try:
             since_ts = datetime.fromisoformat(since_iso.replace("Z", "+00:00")).timestamp()
             rows = [r for r in rows if r["t"] >= since_ts]
+            moment_rows = [m for m in moment_rows if m["t"] >= since_ts]
         except Exception as e:
             logger.warning(f"⚠️ Could not parse since_iso '{since_iso}': {e}")
 
+    # Index captured frames by whole-second timestamp. insert_frame and
+    # insert_moment are handed the same t_now in analyze_frame, so a moment's
+    # image lines up with the frame that produced it at second granularity.
+    evidence_by_sec: dict[int, list[str]] = {}
+    for m in moment_rows:
+        url = m.get("evidence_url")
+        if url:
+            evidence_by_sec.setdefault(int(m["t"]), []).append(url)
+
+    ALL_TYPES = tuple(VIOLATION_TYPES.keys())
     buckets: dict[str, dict] = {
         t: {"count": 0, "first_at": None, "last_at": None,
             "peak_risk": 0, "peak_intervention_level": "CLEAR",
             "evidence_paths": [], "sample_events": []}
-        for t in ("DOWN_GAZE", "SIDE_GAZE")
+        for t in ALL_TYPES
     }
     peak_event = None
 
     for row in rows:
-        gaze = row.get("gaze") or ""
         composure = row.get("composure", 100)
         risk = int(100 - composure)
         ts = row["t"]
+        frame_evidence = evidence_by_sec.get(int(ts), [])
 
         if peak_event is None or risk > peak_event["risk_score"]:
             peak_event = {"timestamp": ts, "risk_score": risk,
                           "intervention_level": "", "logic_trace": ""}
 
-        for vtype in ("DOWN_GAZE", "SIDE_GAZE"):
-            predicate = VIOLATION_TYPES[vtype]
-            if not predicate(gaze, row.get("head_pose", "")):
+        for vtype, predicate in VIOLATION_TYPES.items():
+            if not predicate(row):
                 continue
             b = buckets[vtype]
             b["count"] += 1
@@ -388,8 +515,31 @@ def _compute_session_breakdown(session_id: str, since_iso: str | None = None) ->
             b["last_at"] = ts
             if risk > b["peak_risk"]:
                 b["peak_risk"] = risk
+            # Cap stored proof at 6 per pattern — enough to browse, not so many
+            # the picker overflows. Only frames that actually captured evidence
+            # (i.e. BEA flagged them) contribute an image.
+            for url in frame_evidence:
+                if url not in b["evidence_paths"] and len(b["evidence_paths"]) < 6:
+                    b["evidence_paths"].append(url)
             if len(b["sample_events"]) < 5:
                 b["sample_events"].append({"timestamp": ts, "risk_score": risk})
+
+    # Object criticals (phone / book) can't be rebuilt from timeline_frames —
+    # YOLO labels aren't stored per frame. Recover them straight from the
+    # flagged moments' captions so their captured images still surface.
+    for m in moment_rows:
+        vtype = _classify_moment_caption(m.get("caption", ""))
+        if not vtype:
+            continue
+        b = buckets[vtype]
+        b["count"] += 1
+        ts = m["t"]
+        if b["first_at"] is None:
+            b["first_at"] = ts
+        b["last_at"] = ts
+        url = m.get("evidence_url")
+        if url and url not in b["evidence_paths"] and len(b["evidence_paths"]) < 6:
+            b["evidence_paths"].append(url)
 
     violations_by_type = {}
     for vtype, b in buckets.items():
@@ -397,6 +547,7 @@ def _compute_session_breakdown(session_id: str, since_iso: str | None = None) ->
             continue
         b["approx_total_seconds"] = b["count"] * INFERENCE_CADENCE_SEC
         violations_by_type[vtype] = b
+
 
     return {
         "candidate_id": session_id,
@@ -606,6 +757,12 @@ async def upload_resume(file: UploadFile = File(...)):
             "status": "success",
             "filename": file.filename,
             "questions": questions,
+            # The conversation engine needs the raw resume for context — its
+            # /start-session contract takes resume_text. Omitting it here meant
+            # the frontend always sent "" and the interviewer never saw the
+            # resume, so it could not reference the candidate's actual
+            # employers, university or projects.
+            "resume_text": resume_text,
         }
     finally:
         if os.path.exists(temp_path):
