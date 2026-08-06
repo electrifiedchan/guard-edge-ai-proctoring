@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { initialsFrom, resolveDisplayName } from "@/lib/greeting";
-import { getActiveResume } from "@/lib/resumeMemory";
+import { initialsFrom, nameFromResumeText, resolveDisplayName } from "@/lib/greeting";
+import { getActiveResume, readCache } from "@/lib/resumeMemory";
 import { cn } from "@/lib/utils";
 
 const PREFERRED_NAME_KEY = "guard.preferredName";
@@ -35,25 +35,47 @@ function readIdentity(): { name: string; initials: string | null } {
   const preferred = safeRead("local", PREFERRED_NAME_KEY);
 
   let resumeName: string | null = null;
+  let resumeText: string | null = null;
   const session = safeRead("session", SESSION_KEY);
   if (session) {
     try {
-      resumeName = (JSON.parse(session) as { file_name?: string }).file_name ?? null;
+      const parsed = JSON.parse(session) as { file_name?: string; resume_text?: string };
+      resumeName = parsed.file_name ?? null;
+      resumeText = parsed.resume_text ?? null;
     } catch {
       // malformed session blob — fall through to the remembered resume
     }
   }
-  resumeName = resumeName ?? getActiveResume()?.file_name ?? null;
+
+  const remembered = getActiveResume();
+  resumeName = resumeName ?? remembered?.file_name ?? null;
+  // After a tab close there is no live session, but the parsed resume survives
+  // in the cache the pointer names — so the real name is still recoverable.
+  if (!resumeText && remembered) resumeText = readCache(remembered.hash)?.resume_text ?? null;
 
   const cleaned = resumeName
     ? resumeName.replace(/\.(pdf|docx?|txt)$/i, "").replace(/[_-]+/g, " ")
     : null;
 
-  const resolved = resolveDisplayName({ preferredName: preferred, resumeName: cleaned });
+  // The resume body is the only place the candidate's actual name exists —
+  // nothing upstream extracts it, and the filename is often "testresume.pdf",
+  // which is where the wrong letters came from. Filename is now the fallback.
+  const fromResume = nameFromResumeText(resumeText);
+
+  const resolved = resolveDisplayName({
+    preferredName: preferred,
+    resumeName: fromResume ?? cleaned,
+  });
 
   // Prefer full-name initials ("Aarav Mehta" -> AM). resolveDisplayName returns
   // only a first name, which would collapse to "AA" and lose the surname.
-  const initials = initialsFrom(preferred ?? cleaned) ?? initialsFrom(resolved.name);
+  // A typed or resume-sourced name is real text, so filename-noise stripping is
+  // off for those; only the filename path needs it.
+  const initials =
+    initialsFrom(preferred, false) ??
+    initialsFrom(fromResume, false) ??
+    initialsFrom(cleaned) ??
+    initialsFrom(resolved.name, false);
 
   return { name: resolved.name, initials: resolved.name === "there" ? null : initials };
 }

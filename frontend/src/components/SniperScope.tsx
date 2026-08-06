@@ -712,12 +712,12 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
         {/* Calibration Overlay */}
         {isScanning && isCalibrating && (
           <div className="absolute inset-0 dot-grid flex items-center justify-center text-center p-6 bg-[var(--color-surface)]/60 backdrop-blur-sm z-10 transition-opacity">
-            <div className="terminal-slab w-full max-w-[430px] p-4 text-center haze">
+            <div className="terminal-slab w-full max-w-[560px] p-6 text-center haze">
               <span className="flex items-center justify-center gap-2 mb-3">
                 <span className="w-2 h-2 rounded-full bg-[var(--color-signal)] pulse-signal" />
                 <span className="eyebrow text-[var(--color-signal)]">Zero-Hour Calibration</span>
               </span>
-              <div className="font-mono text-[13px] leading-relaxed text-[var(--color-slate)]">
+              <div className="font-mono text-[15px] leading-relaxed text-[var(--color-slate)]">
                 Calibrating Posture Baseline...<br/>
                 Please look naturally at the screen.
               </div>
@@ -728,7 +728,10 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
         {/* Idle-state placeholder grid (only when no stream) */}
         {!isScanning && (
           <div className="absolute inset-0 dot-grid flex items-center justify-center text-center p-6">
-            <div className="terminal-slab w-full max-w-[430px] p-4 text-left haze">
+            {/* Sized for legibility in figures: this panel is the shot that
+                ends up in the paper, where the whole frame gets scaled to a
+                column width. Undersized type here becomes unreadable there. */}
+            <div className="terminal-slab w-full max-w-[560px] p-6 text-left haze">
               <div className="flex items-center justify-between mb-4">
                 <span className="eyebrow">Optics offline</span>
                 <span className="flex items-center gap-1.5">
@@ -737,7 +740,8 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
                   <span className="w-2 h-2 rounded-full bg-[var(--color-signal)]" />
                 </span>
               </div>
-              <div className="font-mono text-[12px] leading-relaxed">
+              <div className="font-mono text-[15px] leading-relaxed">
+
                 <div className="text-[var(--color-slate)]">&gt; load gatekeeper.face_mesh</div>
                 <div className="text-[var(--color-slate)]">&gt; attach camera.stream</div>
                 <div className="text-[var(--color-signal)]">&gt; ready: local inference only</div>
@@ -750,7 +754,7 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
         {/* Status chip — top-left */}
         <div className="absolute top-3 left-3 z-20 flex items-center gap-2">
           <span
-            className={`flex items-center gap-2 px-2.5 py-1 rounded-md text-[10px] font-medium uppercase backdrop-blur-md border ${
+            className={`flex items-center gap-2 px-2.5 py-1 rounded-md text-[11px] font-medium uppercase backdrop-blur-md border ${
               sysStatus === "ACTIVE"
                 ? "bg-[var(--color-signal)]/10 border-[var(--color-signal)]/40 text-[var(--color-signal)]"
                 : sysStatus === "COMPROMISED"
@@ -771,7 +775,7 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
           </span>
 
           {sysStatus === "ACTIVE" && (
-            <span className="px-2.5 py-1 rounded-md text-[10px] font-medium uppercase backdrop-blur-md border bg-[var(--color-surface)]/70 border-[var(--color-hairline)] text-[var(--color-slate)]">
+            <span className="px-2.5 py-1 rounded-md text-[11px] font-medium uppercase backdrop-blur-md border bg-[var(--color-surface)]/70 border-[var(--color-hairline)] text-[var(--color-slate)]">
               5s sample
             </span>
           )}
@@ -782,14 +786,14 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
           {!isScanning ? (
             <button
               onClick={startCamera}
-              className="px-4 h-9 rounded-md bg-[var(--color-signal)]/15 text-[var(--color-signal)] text-[12px] font-medium border border-[var(--color-signal)]/40 hover:bg-[var(--color-signal)]/25 hover:border-[var(--color-signal)] transition-colors cursor-pointer backdrop-blur-md"
+              className="px-4 h-9 rounded-md bg-[var(--color-signal)]/15 text-[var(--color-signal)] text-[13px] font-medium border border-[var(--color-signal)]/40 hover:bg-[var(--color-signal)]/25 hover:border-[var(--color-signal)] transition-colors cursor-pointer backdrop-blur-md"
             >
               Engage sentry
             </button>
           ) : (
             <button
               onClick={stopCamera}
-              className="px-4 h-9 rounded-md bg-[var(--color-danger)]/10 backdrop-blur-md border border-[var(--color-danger)]/30 text-[var(--color-danger)] text-[12px] font-medium hover:bg-[var(--color-danger)]/20 hover:border-[var(--color-danger)]/60 transition-colors cursor-pointer"
+              className="px-4 h-9 rounded-md bg-[var(--color-danger)]/10 backdrop-blur-md border border-[var(--color-danger)]/30 text-[var(--color-danger)] text-[13px] font-medium hover:bg-[var(--color-danger)]/20 hover:border-[var(--color-danger)]/60 transition-colors cursor-pointer"
             >
               Disengage
             </button>
@@ -800,8 +804,11 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
       {/* Bottom — Telemetry strip */}
       <div className="w-full flex flex-col sm:flex-row gap-3">
 
-        {/* BEA Temporal panel */}
-        <div className="lift-1 rounded-lg p-3 flex-1">
+        {/* BEA Temporal panel — sized to its content. It holds four short,
+            fixed-width readouts, so giving it the leftover space just pads
+            the middle; the log next to it carries a full sentence and is the
+            one that actually needs the width. */}
+        <div className="lift-1 rounded-lg p-3 flex-shrink-0">
           <div className="flex justify-between items-center mb-2">
             <span className="eyebrow flex items-center gap-2">
               <span className="w-1 h-1 rounded-full bg-[var(--color-fog)]" />
@@ -809,7 +816,8 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
             </span>
             <button
               onClick={handleReset}
-              className="h-6 px-2 rounded-md text-[10px] font-medium text-[var(--color-warn)]/70 border border-[var(--color-warn)]/20 bg-transparent hover:text-[var(--color-warn)] hover:border-[var(--color-warn)]/50 transition-colors cursor-pointer"
+              className="h-6 px-2 rounded-md text-[11px] font-medium text-[var(--color-warn)]/70 border border-[var(--color-warn)]/20 bg-transparent hover:text-[var(--color-warn)] hover:border-[var(--color-warn)]/50 transition-colors cursor-pointer"
+
             >
               Clear memory
             </button>
@@ -853,8 +861,11 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
           </div>
         </div>
 
-        {/* Behavioral Log */}
-        <div className="lift-1 rounded-lg px-3 py-2.5 flex flex-col justify-center sm:w-[200px] flex-shrink-0">
+        {/* Behavioral Log — takes the remaining width. Verdict strings run
+            long ("BACKEND CONNECTION FAILED. CHECK IF EDGE_MAIN.PY..."), and
+            at 200px they wrapped to four cramped lines. */}
+        <div className="lift-1 rounded-lg px-3 py-2.5 flex flex-col justify-center flex-1 min-w-0">
+
           <span className="eyebrow mb-1 flex items-center gap-2">
             <span
               className={`w-1.5 h-1.5 rounded-full ${
@@ -864,7 +875,8 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
             Behavioral Log
           </span>
           <p
-            className={`font-mono text-[11px] leading-snug ${
+            className={`font-mono text-[13px] leading-snug ${
+
               latestVerdict.includes("CRITICAL") || latestVerdict.includes("FATAL")
                 ? "text-[var(--color-danger)]"
                 : "text-[var(--color-parchment)]"

@@ -17,6 +17,7 @@ import {
 import type { TrendPoint } from "@/lib/dashboard";
 import { shortDate } from "@/lib/dashboard";
 import { cn } from "@/lib/utils";
+import { useChartColors } from "@/lib/chartTheme";
 
 interface ComposureTrendProps {
   trend: TrendPoint[];
@@ -43,7 +44,12 @@ interface TooltipPayloadItem {
   payload: TrendPoint;
 }
 
-function DarkTooltip({
+/**
+ * Renamed from DarkTooltip: it is no longer dark-only. The surface is styled
+ * with palette classes, which globals.css re-maps under `.light`, so the same
+ * component reads correctly in both themes.
+ */
+function ChartTooltip({
   active,
   payload,
 }: {
@@ -124,6 +130,8 @@ export default function ComposureTrend({ trend }: ComposureTrendProps) {
   const router = useRouter();
   const reduceMotion = useReducedMotion();
   const [range, setRange] = useState<Range>("30d");
+  const c = useChartColors();
+
 
 
   const data = useMemo(() => {
@@ -180,42 +188,42 @@ export default function ComposureTrend({ trend }: ComposureTrendProps) {
             >
               <defs>
                 <linearGradient id="avgGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#10b981" stopOpacity={0.35} />
-                  <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
+                  <stop offset="0%" stopColor={c.series} stopOpacity={0.35} />
+                  <stop offset="100%" stopColor={c.series} stopOpacity={0} />
                 </linearGradient>
                 <linearGradient id="minGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#10b981" stopOpacity={0.14} />
-                  <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
+                  <stop offset="0%" stopColor={c.series} stopOpacity={0.14} />
+                  <stop offset="100%" stopColor={c.series} stopOpacity={0} />
                 </linearGradient>
               </defs>
 
-              <CartesianGrid vertical={false} stroke="#27272a" />
+              <CartesianGrid vertical={false} stroke={c.grid} />
               <XAxis
                 dataKey="date"
                 tickLine={false}
                 axisLine={false}
                 minTickGap={32}
                 tickFormatter={shortDate}
-                tick={{ fill: "#737373", fontSize: 11 }}
+                tick={{ fill: c.tick, fontSize: 11 }}
               />
               <YAxis domain={[0, 100]} hide />
               <ReferenceLine
                 y={70}
                 strokeDasharray="4 4"
-                stroke="#34d399"
+                stroke={c.threshold}
                 label={{
                   value: "Interview ready",
-                  fill: "#34d399",
+                  fill: c.threshold,
                   fontSize: 10,
                   position: "insideTopRight",
                 }}
               />
-              <Tooltip content={<DarkTooltip />} cursor={{ stroke: "#3f3f46" }} />
+              <Tooltip content={<ChartTooltip />} cursor={{ stroke: c.cursor }} />
 
               <Area
                 type="monotone"
                 dataKey="min_composure"
-                stroke="#10b981"
+                stroke={c.series}
                 strokeOpacity={0.4}
                 strokeWidth={1.5}
                 fill="url(#minGrad)"
@@ -226,11 +234,17 @@ export default function ComposureTrend({ trend }: ComposureTrendProps) {
               <Area
                 type="monotone"
                 dataKey="avg_composure"
-                stroke="#10b981"
+                stroke={c.series}
                 strokeWidth={2}
                 fill="url(#avgGrad)"
                 dot={false}
-                activeDot={{ r: 4, fill: "#6ee7b7", stroke: "#0a0a0a", cursor: "pointer" }}
+                activeDot={{
+                  r: 4,
+                  fill: c.seriesBright,
+                  stroke: c.dotFill,
+                  cursor: "pointer",
+                }}
+
                 isAnimationActive={!reduceMotion}
               />
 

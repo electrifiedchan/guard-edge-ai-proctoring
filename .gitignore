@@ -87,6 +87,12 @@ frontend/public/mediapipe/
 /instructions/
 /landing/
 
+# ─── Conference paper (moved out to C:\Users\user\Documents\7TH_SEM\PROJECT) ──
+# The LaTeX sources, benchmarks and build artifacts for the paper are not part
+# of the shipped product. The folder now lives outside the repo; this rule is a
+# safety net in case a copy is ever dropped back in.
+/FOR CONFERENCE PAPER/
+
 # ─── Tool output / generated artifacts ───────────────────────────────────────
 /graphify-out/
 /.kilo/
@@ -97,8 +103,12 @@ testresume.pdf
 *.resume.pdf
 
 # ─── Scratch files ───────────────────────────────────────────────────────────
+# "/d" and "/0" are not real files — they are junk left by mistyped shell
+# redirects (a stray `> d` or `> 0`). Anchored with a leading slash so they can
+# never match a legitimately-named file deeper in the tree.
 temp.txt
 /d
+/0
 
 # Misspelled duplicate of files already served from frontend/public/
 /assets/assests/

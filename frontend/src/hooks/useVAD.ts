@@ -16,6 +16,16 @@ export function useVAD({
   const [isListening, setIsListening] = useState(false);
   const [isVoiceActive, setIsVoiceActive] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
+  /**
+   * Same RMS as `audioLevel`, but written every animation frame instead of
+   * through setState. The waveform samples this per frame: routing 60 updates
+   * a second through React state meant re-rendering the whole sentry page
+   * (camera panel, transcript, chat) on every frame, so React throttled the
+   * commits and the ribbons lagged behind the voice. Consumers that only need
+   * a coarse value can keep using the state copy below.
+   */
+  const audioLevelRef = useRef(0);
+
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -97,7 +107,9 @@ export function useVAD({
         sumSquares += dataArray[i] * dataArray[i];
       }
       const rms = Math.sqrt(sumSquares / dataArray.length);
-      setAudioLevel(Math.min(rms * 10, 1));
+      const level = Math.min(rms * 10, 1);
+      audioLevelRef.current = level;
+      setAudioLevel(level);
 
       if (rms > volumeThreshold) {
         hasSpeechRef.current = true;
@@ -115,6 +127,7 @@ export function useVAD({
             if (audioContext.state !== "closed") audioContext.close();
             setIsListening(false);
             setIsVoiceActive(false);
+            audioLevelRef.current = 0;
             setAudioLevel(0);
             return;
           }
@@ -140,6 +153,7 @@ export function useVAD({
     }
     setIsListening(false);
     setIsVoiceActive(false);
+    audioLevelRef.current = 0;
     setAudioLevel(0);
   }, []);
 
@@ -147,6 +161,7 @@ export function useVAD({
     isListening,
     isVoiceActive,
     audioLevel,
+    audioLevelRef,
     startListening,
     stopListening,
     cleanup,

@@ -4,6 +4,8 @@ import HeatMap from "@uiw/react-heat-map";
 import { useMemo } from "react";
 import type { ActivityDay } from "@/lib/dashboard";
 import { HEATMAP, densifyActivity, heatmapWidth } from "@/lib/dashboard";
+import { useChartColors } from "@/lib/chartTheme";
+
 
 import { cn } from "@/lib/utils";
 
@@ -20,7 +22,9 @@ export default function PracticeStreak({
   bestStreak,
   days = 84,
 }: PracticeStreakProps) {
+  const c = useChartColors();
   const densified = useMemo(() => densifyActivity(activity, days), [activity, days]);
+
 
   const startDate = useMemo(() => {
     const d = new Date();
@@ -52,13 +56,8 @@ export default function PracticeStreak({
 
             legendCellSize={0}
             rectProps={{ rx: 3 }}
-            panelColors={{
-              0: "#18181b",
-              1: "#064e3b",
-              2: "#047857",
-              3: "#10b981",
-              5: "#6ee7b7",
-            }}
+            panelColors={c.heat}
+
             rectRender={(props, data) => (
               <rect {...props}>
                 <title>{`${data.count || 0} session${data.count === 1 ? "" : "s"} on ${data.date}`}</title>

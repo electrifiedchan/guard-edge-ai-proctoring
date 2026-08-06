@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Inter, Fraunces, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import { ThemeProvider, THEME_SCRIPT } from "@/lib/theme";
+
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -48,8 +50,25 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} ${inter.variable} ${fraunces.variable} ${jetbrainsMono.variable} h-full antialiased`}
+      // THEME_SCRIPT below adds/removes `light` on this element before React
+      // hydrates, so the client className intentionally differs from the SSR
+      // one and React logs a mismatch. The divergence is the whole point of
+      // the no-flash script, and it only ever affects this one attribute —
+      // so we silence it here rather than give up pre-paint theming.
+      // Note: this is shallow, it does not suppress warnings for children.
+      suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+
+      <head>
+        {/* Must run before first paint, or light-mode users see a dark flash
+            on every navigation. Intentionally a blocking inline script —
+            do not convert this to a useEffect. See lib/theme.tsx. */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+      </head>
+      <body className="min-h-full flex flex-col">
+        <ThemeProvider>{children}</ThemeProvider>
+      </body>
+
     </html>
   );
 }

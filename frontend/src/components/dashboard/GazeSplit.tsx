@@ -1,6 +1,8 @@
 "use client";
 
 import type { GazeSplit as GazeSplitData } from "@/lib/dashboard";
+import { useChartColors } from "@/lib/chartTheme";
+
 
 interface GazeSplitProps {
   split: GazeSplitData;
@@ -11,14 +13,26 @@ interface GazeSplitProps {
  * The spec's four-colour legend assumed separate left/right, which the engine
  * does not emit — "away" covers both, so we use one colour for it.
  */
+/**
+ * Colour comes from useChartColors at render time, not from a literal here:
+ * these values are passed as inline styles, so the CSS cascade can't re-map
+ * them on theme change the way it does for className-based colours.
+ */
 const SEGMENTS = [
-  { key: "center_pct", label: "Center", color: "#10b981" },
-  { key: "away_pct", label: "Away (side or up)", color: "#6366f1" },
-  { key: "down_pct", label: "Down", color: "#f59e0b" },
+  { key: "center_pct", label: "Center", tone: "center" },
+  { key: "away_pct", label: "Away (side or up)", tone: "away" },
+  { key: "down_pct", label: "Down", tone: "down" },
 ] as const;
 
+
 export default function GazeSplit({ split }: GazeSplitProps) {
-  const rows = SEGMENTS.map((s) => ({ ...s, pct: split[s.key] ?? 0 }));
+  const c = useChartColors();
+  const rows = SEGMENTS.map((s) => ({
+    ...s,
+    pct: split[s.key] ?? 0,
+    color: c.categorical[s.tone],
+  }));
+
   const total = rows.reduce((sum, r) => sum + r.pct, 0);
 
   return (

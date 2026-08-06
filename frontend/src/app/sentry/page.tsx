@@ -9,6 +9,8 @@ import VoiceOrb, { VoiceState } from "@/components/VoiceOrb";
 import LoadingOverlay from "@/components/LoadingOverlay";
 import DashboardButton from "@/components/DashboardButton";
 import { useVAD } from "@/hooks/useVAD";
+import { beginSpeech, endSpeech, noteWordBoundary } from "@/lib/speechLevel";
+
 
 type ChatMessage = {
   role: "interviewer" | "candidate";
@@ -60,7 +62,7 @@ export default function SentryPage() {
   const sessionEndingRef = useRef(false);
 
   // VAD hook
-  const { isVoiceActive, audioLevel, startListening, stopListening } = useVAD({
+  const { isVoiceActive, audioLevel, audioLevelRef, startListening, stopListening } = useVAD({
     silenceThresholdMs: 2500,
     volumeThreshold: 0.01,
     onSpeechEnd: handleSpeechEnd,
@@ -105,9 +107,19 @@ export default function SentryPage() {
         ) ||
         voices.find((v) => v.lang.startsWith("en"));
       if (preferred) utterance.voice = preferred;
-      utterance.onend = () => { resolve(); };
-      utterance.onerror = () => { resolve(); };
+
+      // Drive the Audio Interrogator waveform from the synthesiser's own
+      // progress. `boundary` fires as each word starts, which is the only
+      // observable we get — speechSynthesis has no AudioNode to analyse.
+      utterance.onstart = () => beginSpeech();
+      utterance.onboundary = (e) => {
+        if (e.name === "sentence") return; // word events carry the rhythm
+        noteWordBoundary(e.charLength);
+      };
+      utterance.onend = () => { endSpeech(); resolve(); };
+      utterance.onerror = () => { endSpeech(); resolve(); };
       window.speechSynthesis.speak(utterance);
+
     });
   }, []);
 
@@ -277,7 +289,9 @@ export default function SentryPage() {
     setIsGenerating(true);
     stopListening();
     window.speechSynthesis?.cancel();
+    endSpeech();
     sniperRef.current?.stopCamera();
+
     setLiveTranscript("GENERATING PERFORMANCE REPORT…");
 
     try {
@@ -374,7 +388,12 @@ export default function SentryPage() {
         {/* Right sidebar — VoiceOrb + Transcript/Chat */}
         <div className="flex-shrink-0 flex flex-col gap-3 w-full xl:w-[420px] h-full overflow-hidden">
           {/* VoiceOrb — driven by interview turn state */}
-          <VoiceOrb externalState={orbState} level={audioLevel} voiceActive={isVoiceActive} />
+          <VoiceOrb
+            externalState={orbState}
+            level={audioLevel}
+            levelRef={audioLevelRef}
+            voiceActive={isVoiceActive}
+          />
 
           {/* Live transcript / Chat panel */}
           <div className="lift-1 rounded-lg p-4 flex flex-col flex-1 min-h-0 relative overflow-hidden">

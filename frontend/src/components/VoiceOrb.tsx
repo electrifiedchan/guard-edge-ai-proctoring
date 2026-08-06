@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import Waveform from "@/components/landing/bento/Waveform";
+import { getSpeechEnvelope, NO_BOUNDARY_DATA } from "@/lib/speechLevel";
 
 export type VoiceState = "IDLE" | "LISTEN" | "PROCESS" | "SPEAK";
 
@@ -13,6 +14,12 @@ interface VoiceOrbProps {
    * ribbons track the candidate's actual voice instead of a synthetic beat.
    */
   level?: number;
+  /**
+   * Per-frame mic level from useVAD. Preferred over `level` when present: the
+   * state prop can only update as fast as React re-renders the parent, which
+   * is why the ribbons trailed the candidate's voice.
+   */
+  levelRef?: { current: number };
   /**
    * VAD gating from useVAD — whether speech is actually being detected, as
    * opposed to the mic merely being open. Only refines the LISTEN label.
@@ -84,6 +91,7 @@ export default function VoiceOrb({
   onTranscriptUpdate,
   externalState,
   level,
+  levelRef,
   voiceActive,
 }: VoiceOrbProps) {
   // Internal state only matters when nothing external is driving us — the
@@ -124,9 +132,10 @@ export default function VoiceOrb({
 
   const v = STATE_META[voiceState];
   const isLive = voiceState !== "IDLE";
-  // A real mic level only means anything while listening; PROCESS/SPEAK have no
-  // candidate audio to show, so those fall back to a synthetic beat.
-  const useRealLevel = voiceState === "LISTEN" && typeof level === "number";
+  // Mic audio only exists while listening. SPEAK reads the TTS envelope
+  // instead; PROCESS has no audio at all and stays synthetic.
+  const useRealLevel =
+    voiceState === "LISTEN" && (levelRef !== undefined || typeof level === "number");
 
   // The canvas pulls amplitude per frame through getLevel, so everything it
   // needs lives in a ref. Driving it through state instead would re-render this
@@ -136,25 +145,63 @@ export default function VoiceOrb({
     useRealLevel,
     level: level ?? 0,
     isLive,
+    isSpeaking: voiceState === "SPEAK",
   });
 
   useEffect(() => {
-    frame.current = { baseline: v.baseline, useRealLevel, level: level ?? 0, isLive };
-  }, [v.baseline, useRealLevel, level, isLive]);
+    frame.current = {
+      baseline: v.baseline,
+      useRealLevel,
+      level: level ?? 0,
+      isLive,
+      isSpeaking: voiceState === "SPEAK",
+    };
+  }, [v.baseline, useRealLevel, level, isLive, voiceState]);
+
+  // Smoothed across frames so the ribbons ease between samples instead of
+  // snapping — raw RMS and the TTS envelope are both quite jumpy per frame.
+  const smoothed = useRef(0);
 
   const getLevel = useCallback(() => {
     const f = frame.current;
-    // RMS from useVAD sits low in the 0–1 range; scale it up so normal speech
-    // fills the panel instead of barely lifting off the baseline.
-    if (f.useRealLevel) return Math.max(f.baseline, Math.min(1, f.level * 3));
-    if (!f.isLive) return f.baseline;
-    // Two beating sines — the same organic motion as the landing page's
-    // CellVoice, for the states where there's no mic signal to show.
-    const t = performance.now() / 1000;
-    const synthetic =
-      f.baseline + 0.22 * Math.sin(t * 1.7) + 0.12 * Math.sin(t * 0.6 + 1.3);
-    return Math.max(0, Math.min(1, synthetic));
-  }, []);
+
+    const synthetic = () => {
+      // Two beating sines — the same organic motion as the landing page's
+      // CellVoice, for states where no audio signal is observable.
+      const t = performance.now() / 1000;
+      return f.baseline + 0.22 * Math.sin(t * 1.7) + 0.12 * Math.sin(t * 0.6 + 1.3);
+    };
+
+    let target: number;
+
+    if (f.isSpeaking) {
+      // The AI's turn: follow the synthesiser's word boundaries so the ribbons
+      // rise and fall with the sentence actually being spoken.
+      const envelope = getSpeechEnvelope();
+      target =
+        envelope === NO_BOUNDARY_DATA
+          ? synthetic() // voice reports no boundaries — better than flatlining
+          : 0.12 + envelope * 0.85;
+    } else if (f.useRealLevel) {
+      // useVAD already scales RMS by 10. The extra x3 here pushed anything
+      // above a murmur to a clipped 1.0, so the waveform sat pinned at full
+      // height and stopped tracking the voice; x1.6 keeps headroom. The old
+      // baseline floor (0.3 while listening) also swallowed the bottom third
+      // of the range, which is exactly where quiet speech lives.
+      const mic = levelRef ? levelRef.current : f.level;
+      target = Math.min(1, 0.06 + mic * 1.6);
+    } else if (!f.isLive) {
+      target = f.baseline;
+    } else {
+      target = synthetic();
+    }
+
+    target = Math.max(0, Math.min(1, target));
+    // Attack faster than release: catch the onset of a word, then fall away.
+    const k = target > smoothed.current ? 0.45 : 0.14;
+    smoothed.current += (target - smoothed.current) * k;
+    return smoothed.current;
+  }, [levelRef]);
 
   // While the mic is open, distinguish "we hear you" from "waiting" — the one
   // piece of information the old separate level bar carried.

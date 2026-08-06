@@ -3,6 +3,7 @@
 import { motion, useReducedMotion } from "framer-motion";
 import type { Readiness } from "@/lib/dashboard";
 import { cn } from "@/lib/utils";
+import { useChartColors } from "@/lib/chartTheme";
 import CountUp from "./CountUp";
 
 interface ReadinessRingProps {
@@ -30,6 +31,7 @@ const BAND_TONE: Record<Readiness["band"], string> = {
 
 export default function ReadinessRing({ readiness }: ReadinessRingProps) {
   const reduceMotion = useReducedMotion();
+  const c = useChartColors();
 
   const score = readiness?.score ?? 0;
   const offset = CIRC * (1 - score / 100);
@@ -53,8 +55,9 @@ export default function ReadinessRing({ readiness }: ReadinessRingProps) {
         >
           <defs>
             <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stopColor="#10b981" />
-              <stop offset="100%" stopColor="#6ee7b7" />
+              <stop offset="0%" stopColor={c.series} />
+              <stop offset="100%" stopColor={c.seriesBright} />
+
             </linearGradient>
           </defs>
 
@@ -64,7 +67,7 @@ export default function ReadinessRing({ readiness }: ReadinessRingProps) {
               cy={SIZE / 2}
               r={R}
               fill="none"
-              stroke="#27272a"
+              stroke={c.grid}
               strokeWidth={10}
             />
 
@@ -77,7 +80,8 @@ export default function ReadinessRing({ readiness }: ReadinessRingProps) {
                 y1={SIZE / 2}
                 x2={SIZE / 2 + R + 6}
                 y2={SIZE / 2}
-                stroke={t === 70 ? "#34d399" : "#52525b"}
+                stroke={t === 70 ? c.threshold : c.cursor}
+
                 strokeOpacity={t === 70 ? 0.9 : 0.6}
                 strokeWidth={t === 70 ? 2 : 1.5}
                 transform={`rotate(${t * 3.6} ${SIZE / 2} ${SIZE / 2})`}

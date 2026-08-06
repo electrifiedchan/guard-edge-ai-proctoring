@@ -44,9 +44,180 @@
   --font-mono:    "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 
+/* ── Light theme ─────────────────────────────────────────────────────────
+   Re-maps the SAME semantic tokens declared in @theme above. Tailwind v4
+   compiles `bg-canvas` to `var(--color-canvas)`, so every component using
+   semantic utilities flips automatically — no per-component dark: variants.
+
+   Applied by adding `.light` to <html> (see ThemeScript in layout.tsx).
+
+   The landing page opts OUT permanently. `/cube.mp4` is an opaque video with
+   black baked into it, composited by a radial mask against a matching black
+   page (Hero.tsx). On a light background it reads as a grey blob with a
+   halo, and no CSS blend mode fixes it — mp4 cannot carry alpha.
+
+   Token names stay literal (`snow`, `canvas`) even though values invert, so
+   existing class names keep working. Read them as roles, not colours:
+   canvas = page, surface = card, snow = primary text.                      */
+html.light {
+  --color-canvas:    #fbfbfa;   /* warm off-white, not pure #fff */
+  --color-surface:   #ffffff;
+  --color-surface-2: #f4f4f2;
+  --color-surface-3: #ebebe8;
+
+  /* Borders stay warm, preserving the brand's charcoal containment.
+     Kept deliberately darker than a typical light-mode hairline: these panels
+     get screenshotted for print, where a downscaled #dcd9d6 edge on white
+     disappears entirely and the card reads as floating text. */
+  --color-hairline:        #c4bfba;
+  --color-hairline-strong: #9c968f;
+
+
+  /* Emerald darkened for contrast — #00d992 on white is ~1.7:1, unreadable */
+  --color-signal:      #00875a;
+  --color-signal-soft: rgba(0, 135, 90, 0.09);
+  --color-mint:        #00795a;
+  --color-iris:        #00875a;
+  --color-iris-hover:  #00996a;
+  --color-iris-press:  #006845;
+
+  /* Severity darkened; amber in particular vanishes on white */
+  --color-warn:   #8a6100;
+  --color-amber:  #a3520a;
+  --color-danger: #c8232a;
+  --color-info:   #1c6d8a;
+
+  /* Text scale inverts: snow becomes near-black ink */
+  --color-snow:      #17171a;
+  --color-parchment: #3a3733;
+  /* slate/fog carry metadata and terminal body copy. The dark-mode values are
+     mid-greys that only work against near-black; on white they fell to ~4:1
+     and lower, so they are darkened here to stay legible when a screenshot is
+     scaled into a two-column paper. */
+  --color-slate:     #52565c;
+  --color-fog:       #6b6f75;
+
+
+  --color-sentry-neon:   #00875a;
+  --color-sentry-border: #dcd9d6;
+
+  /* ── Palette ramp inversion ───────────────────────────────────────────
+     The semantic tokens above only cover components written against them.
+     Most of this codebase predates them and uses Tailwind palette classes
+     directly (bg-neutral-900/70, text-neutral-200, text-emerald-400).
+
+     Tailwind v4 compiles those to var(--color-neutral-900) instead of a
+     literal hex, so redefining the ramp here re-skins every one of those
+     call sites at once — no per-file migration, and alpha modifiers keep
+     working because v4 wraps them in color-mix() around the same var.
+
+     This is NOT a straight numeric mirror (950↔50). A true mirror sends
+     text-neutral-600 (used for muted captions like "offline") to #a3a3a3,
+     which is 2.3:1 on white — invisible. Dark UI can whisper with low
+     contrast because glare is low; light UI cannot. So the low end is
+     pulled darker than a mirror would give, and the mid greys are
+     compressed to stay legible as text.
+
+     Read these as "role in light mode", not as brightness:
+       950 → page      900 → card       800/700 → borders
+       600..400 → muted → secondary text
+       300..50  → primary text, darkest last                            */
+  --color-neutral-950: #fbfbfa;   /* page background */
+  --color-neutral-900: #ffffff;   /* card / panel fill */
+  --color-neutral-850: #f7f7f5;
+  --color-neutral-800: #cdc8c2;   /* hairline borders — must survive downscaling */
+  --color-neutral-700: #b3ada6;   /* hover borders */
+  --color-neutral-600: #6e6a66;   /* muted caption (5.3:1 on white) */
+  --color-neutral-500: #6b6864;   /* metadata */
+  --color-neutral-400: #57534f;   /* tertiary text */
+  --color-neutral-300: #3f3c39;   /* secondary text */
+  --color-neutral-200: #26241f;   /* primary text */
+  --color-neutral-100: #1c1b19;
+  --color-neutral-50:  #111110;
+
+  /* Zinc/stone appear in chart axes and a few panels — same treatment so
+     they don't stay dark next to remapped neutrals. */
+  --color-zinc-950: #fbfbfa;
+  --color-zinc-900: #ffffff;
+  --color-zinc-800: #cdc8c2;
+  --color-zinc-700: #b3ada6;
+  --color-zinc-600: #6e6a66;
+  --color-zinc-500: #6b6864;
+  --color-zinc-400: #57534f;
+  --color-zinc-300: #3f3c39;
+  --color-zinc-200: #26241f;
+  --color-zinc-100: #1c1b19;
+
+  /* Emerald is the brand accent and the most common chromatic class.
+     The stock 300/400 tints are tuned to glow on black and drop to
+     ~1.7:1 on white, so the whole ramp shifts toward its dark end.
+     Values stay recognisably "GUARD emerald", just load-bearing. */
+  --color-emerald-300: #009e6a;
+  --color-emerald-400: #00875a;
+  --color-emerald-500: #00754e;
+  --color-emerald-600: #006443;
+
+  /* Severity + accent hues used by badges, violations and gaze segments.
+     Amber and sky are the worst offenders on white. */
+  --color-rose-400:    #c8232a;
+  --color-rose-500:    #b41d24;
+  --color-violet-400:  #6d28d9;
+  --color-violet-500:  #5b21b6;
+  --color-sky-400:     #1c6d8a;
+  --color-sky-500:     #175f78;
+  --color-amber-400:   #a3520a;
+  --color-amber-500:   #8a4408;
+  --color-indigo-400:  #4338ca;
+  --color-indigo-500:  #3730a3;
+}
+
+/* White-alpha sheens assume a dark backdrop — on white they vanish, so
+   panels lose their rim definition. Swap the two structural ones for
+   ink-alpha equivalents. Targeted rather than global because most
+   white/x uses are decorative and fine to lose.                        */
+html.light [class*="ring-white"] {
+  --tw-ring-color: rgba(23, 23, 26, 0.06);
+}
+
+
+/* Elevation inverts: dark themes lift with borders, light themes with
+   shadow. Without this, light-mode cards are invisible on the page.       */
+html.light .haze {
+  box-shadow: rgba(23, 23, 26, 0.06) 0px 1px 3px, rgba(23, 23, 26, 0.04) 0px 4px 12px;
+}
+html.light .haze-dramatic {
+  box-shadow:
+    rgba(23, 23, 26, 0.10) 0px 12px 40px,
+    rgba(23, 23, 26, 0.06) 0px 0px 0px 1px inset;
+}
+
+html.light ::selection { background: rgba(0, 135, 90, 0.18); }
+
+html.light .dot-grid {
+  background-image: radial-gradient(rgba(23, 23, 26, 0.10) 1px, transparent 1px);
+}
+
+/* Terminal/command surfaces use white-alpha sheens that read as grey haze
+   on a light page — neutralise the gradient, keep the token background.   */
+html.light .command-shell,
+html.light .terminal-slab {
+  background: var(--color-surface);
+}
+
 /* ── Body defaults ──────────────────────────────────────────────────── */
+/* Root size drives every rem-based Tailwind utility (text-sm, text-base,
+   spacing…), so a single bump here lifts the whole product UI rather than
+   requiring per-component edits. 17px because the interface was designed
+   dense — readable on a 27" monitor up close, too small in a projected demo
+   or a printed figure. Arbitrary px sizes (text-[11px]) do NOT scale with
+   this and have to be raised individually where they matter.             */
+html {
+  font-size: 17px;
+}
+
 html, body {
   background-color: var(--color-canvas);
+
   color: var(--color-snow);
   font-family: var(--font-sans);
   font-feature-settings: "calt", "rlig";
@@ -68,11 +239,14 @@ html, body {
 .font-mono { font-family: var(--font-mono); }
 .tabular   { font-variant-numeric: tabular-nums; }
 
-/* Eyebrow — uppercase overline labels with wide tracking */
+/* Eyebrow — uppercase overline labels with wide tracking.
+   12px rather than 11px: these are section headings, and at 11px uppercase
+   they turn to mush once a screenshot is scaled into a paper column. */
 .eyebrow {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.45px;
+  letter-spacing: 0.5px;
+
   text-transform: uppercase;
   color: var(--color-slate);
 }

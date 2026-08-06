@@ -19,6 +19,8 @@ import FocusArea from "@/components/dashboard/FocusArea";
 import SessionList from "@/components/dashboard/SessionList";
 import EmptyDashboard from "@/components/dashboard/EmptyDashboard";
 import DashboardTour, { useTourSeen } from "@/components/dashboard/DashboardTour";
+import ThemeToggle from "@/components/ThemeToggle";
+
 
 
 const CANDIDATE_ID = "major_project_candidate_01";
@@ -249,7 +251,12 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Appearance switch. Lives on the dashboard rather than the landing
+                page because the landing page is pinned dark (see ForceDark). */}
+            <ThemeToggle />
+
             {/* "What am I looking at" — the same guided-tour copy the "?" on each
+
                 panel shows, but as one narrated walkthrough. A first-timer
                 doesn't know the per-panel "?" exists, so this is the discoverable
                 entry point. Ghost styling keeps it secondary to the CTA. */}
