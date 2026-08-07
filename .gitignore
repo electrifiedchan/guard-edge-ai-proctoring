@@ -93,13 +93,12 @@ frontend/public/mediapipe/
 /FOR CONFERENCE PAPER/
 
 # ─── Tool output / generated artifacts ───────────────────────────────────────
-/graphify-out/
 /.kilo/
 
 # ─── Per-developer AI agent config ───────────────────────────────────────────
 # Instructions for whichever assistant a given developer happens to drive the
 # repo with. They encode one person's tool and workflow, not how the project is
-# built or run, so they stay local — same reasoning as /graphify-out/ above.
+# built or run, so they stay local.
 .clinerules
 .clineignore
 
