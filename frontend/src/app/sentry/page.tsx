@@ -349,7 +349,11 @@ export default function SentryPage() {
         "guard_report",
         JSON.stringify({
           report: data.report,
-          average_focus_score: Math.round(data.average_focus_score || 0),
+          // Source field is `focus_score`; the sessionStorage key stays
+          // `average_focus_score` because /report reads that. Reading the
+          // storage-side name off the response gave undefined, and `|| 0`
+          // rendered it as a real 0 — the "focus score always 0%" bug.
+          average_focus_score: Math.round(data.focus_score ?? 0),
           turns_completed: data.turns_completed || 0,
         })
       );

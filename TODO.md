@@ -111,6 +111,17 @@ Still open:
   on startup. If it does, that seeding is now dead weight and should be removed.
   (Note: `?demo=1` on the dashboard is a separate, deliberate design-review path
   and should stay.)
+- **Reviewed 2026-08-07: separation itself works, but two review findings.**
+  First, the dashboard grid keys and the backend session-day keys disagreed by
+  one UTC offset — that is 12d, fixed separately. Second, a real survivability
+  defect: the identity (`activeCandidateId`) was routed through the resume
+  *parse* cache's 24h TTL, and `getActiveResume()` DELETED the pointer on a
+  cache miss. `/upload` calls it on mount, so the first visit a day after
+  practising destroyed the hash — the only link to the candidate's history —
+  and the dashboard then asked for `guard_no_active_resume`, rendering "you
+  never practised" while the rows were still in the DB. Fixed: identity now
+  reads the pointer directly and outlives the cache; a stale cache means
+  "re-upload to start a session", never "you have no past".
 
 
 ## 9. Local LLM (Ollama) wiring
@@ -171,14 +182,24 @@ remaining bug is only that old rows are orphaned. If they are still zero, the
 aggregation itself is broken and item 7 is a red herring. Do not start editing
 the aggregation queries until this is settled.
 
-### 12b. Verdict page focus score reads 0
+### 12b. Verdict page focus score reads 0 — FIXED
 
-`/verdict` shows a focus score of 0 regardless of the run. Note this was reported
-as "still" zero, i.e. it predates today's changes — so unlike 12c/12d it is
-probably *not* explained by 12a. Start at the score's source, not the display:
-confirm the backend emits a non-zero value before assuming the page drops it.
+A field-name split, not a computation bug. `/api/v1/end-session` returns
+`focus_score`; both `/sentry` and `/practice` read `data.average_focus_score`,
+which is `undefined`, and `|| 0` rendered the missing field as a legitimate
+looking 0%. That is why the screenshot showed TURNS 4 alongside FOCUS 0% — the
+turns were counting all along, so the score never had a source problem.
 
-### 12c. Dashboard "Speaking time" reads 0 after ~3 minutes of talking
+- Both pages now read `focus_score`, and the `|| 0` fallback is gone: a missing
+  field must not be indistinguishable from a real zero. That disguise is the
+  whole reason this survived a "predates today's changes" reading.
+- `average_focus_score` still exists on a different, older endpoint that
+  genuinely receives it as input — it was not renamed, and was never in play.
+- Pinned by `backend/test_session_lifecycle.py::verdict returns focus_score
+  under the name the client reads`, which asserts the response key rather than
+  the value, since the value was always right.
+
+### 12c. Dashboard "Speaking time" reads 0 after ~3 minutes of talking — CONFIRMED WORKING
 
 `is_talking` is computed in `SniperScope.tsx` from mouth-aspect-ratio and sent on
 every frame, so the question is where it dies between there and
@@ -187,9 +208,36 @@ fair sampling basis for a "% of time talking" figure — a mouth open at the
 instant of sampling is a coarse proxy, and the metric may be under-counting by
 construction rather than by bug.
 
-### 12d. Streak grid: today's cell not lit after a session
+**Confirmed working by a live run on 2026-08-07** — speaking time increases. The
+sampling-basis concern above still stands as an accuracy question, but it is not
+a bug and nothing here is blocked.
 
-**My UTC hypothesis was wrong — do not chase it.** `timeline.py` buckets with
+### 12d. Streak grid: today's cell not lit after a session — FIXED
+
+**The UTC hypothesis was right about the mechanism but wrong about the side.**
+The note below correctly cleared the backend (`timeline.py` buckets with
+`date.fromtimestamp(...)`, which is local) and correctly predicted the frontend
+was the place to look. What it got wrong was the window: this is not a
+midnight-to-05:30 edge case, it is wrong all evening.
+
+`densifyActivity` in `lib/dashboard.ts` built each cell key by taking a LOCAL
+midnight cursor and then calling `.toISOString().slice(0, 10)`, which converts to
+UTC. At +05:30 local midnight is 18:30 the **previous** day, so every one of the
+84 cell keys was shifted a day earlier than the keys the backend wrote. Today's
+session therefore lit nothing — matching the 8:33pm IST report exactly.
+
+- Added `localDateKey()` and switched `densifyActivity` to it.
+- `lib/demoSummary.ts` held its own copy of the same construction and its comment
+  explicitly instructed the reader to mirror it, so `?demo=1` — the one view
+  that should have exposed this — reproduced the bug faithfully and looked
+  correct. It now imports the shared helper instead of restating the format.
+- Pinned by `frontend/scripts/check-activity-dates.mjs` (12 checks). Run it as
+  `TZ=Asia/Kolkata node frontend/scripts/check-activity-dates.mjs`; under TZ=UTC
+  the divergence assertion reports a **skip** rather than passing vacuously,
+  because at zero offset the old broken code was also correct.
+
+Original note, kept because its reasoning was half right and the half that was
+wrong is instructive: `timeline.py` buckets with
 `date.fromtimestamp(...)`, which is already LOCAL time, so an 8:33pm IST session
 buckets to the correct local day on the backend. The mismatch, if any, is on the
 frontend side: check whether the dashboard builds "today" with
@@ -301,12 +349,49 @@ doing: two of the five defects above are sign/no-opinion errors, which is exactl
 the class that returns silently, and this rewrite has now shipped broken twice.
 
 
-### 12g. Behavioural log copy contradicts the tier
+### 12h. "Head tilted down" while sitting dead centre — FIXED
+
+Reported on 2026-08-07 after the 12f rewrite. Two independent causes; the first
+is a mislabel, the second is a sampling error.
+
+1. **An iris drift was being reported as a head tilt.** With the head genuinely
+   centred, `fuseSensors` falls through every head-led case to Case C, where the
+   iris wins and its vote is translated through `GAZE_TO_POSE` into `HEAD_DOWN`.
+   The backend then narrates that string, honestly, as "head tilted down" — but
+   the head had not moved at all. The vocabulary collapse was the bug: mapping
+   the iris onto head labels threw away which sensor spoke. `GAZE_TO_DRIFT` now
+   emits `GAZE_DOWN`/`GAZE_LEFT`/etc., and `determine_verdict` narrates those as
+   eyes. Risk scoring is deliberately unchanged — a lap glance is a lap glance —
+   so this only fixes the words, which is what 12g is about.
+2. **One frame out of ~300 decided the whole 5s window.** `telemetryRef` is
+   overwritten every `requestAnimationFrame` tick, and the inference loop reads
+   it once per 5s, so the reported pose was whatever the single frame at the
+   sampling instant happened to say. `GAZE_DELTA_Y` is 0.055 eye-widths with no
+   temporal persistence, so ordinary iris jitter crossed it often enough to be
+   caught regularly. Added a 3s majority window: the loop now sends the modal
+   pose over recent frames, with `HEAD_CENTER` winning ties.
+
+Sample starvation was investigated and ruled out — the face loop is
+`requestAnimationFrame`, not the 5s cadence, so `samples.length >= 30` inside the
+5s calibration window is reached easily and the baseline does lock.
+
+Covered by `backend/test_verdict_narration.py` (6 tests, including that a gaze
+drift scores identically to the equivalent head pose) and the 15 frontend
+scenarios for the majority filter.
+
+### 12g. Behavioural log copy contradicts the tier — PARTLY FIXED by 12h
 
 Related to 12e: the log line said "fully engaged and attentive" while the tier
 was `WARNING_LOGGED` at 40%. Whatever the detection outcome, the narration and
 the risk state should never disagree on screen — that undermines trust in the
 number even when the number is right.
+
+12h fixed the specific contradiction where a centred head was narrated as a tilt.
+Still open: the general guarantee. Nothing structurally prevents a clean-frame
+narration from being emitted while the accumulated tier is elevated, because the
+copy is chosen per frame from the current pose while the tier reflects history.
+The frame-level string is arguably correct in isolation — the fix is for the
+narration to acknowledge the standing tier, not to restate the frame.
 
 
 ---

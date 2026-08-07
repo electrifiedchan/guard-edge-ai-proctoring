@@ -183,6 +183,16 @@ def determine_verdict(detected_objects: list, faces: int, talking: bool, head_po
     elif head_pose == "HEAD_DOWN":
         gaze = "DOWN"
         verdict = "Attention drift detected: head tilted down."
+    elif head_pose in ["GAZE_LEFT", "GAZE_RIGHT"]:
+        gaze = "SIDE_OR_UP"
+        direction = head_pose.replace("GAZE_", "").lower()
+        verdict = f"Attention drift detected: eyes drifted {direction}."
+    elif head_pose == "GAZE_DOWN":
+        gaze = "DOWN"
+        verdict = "Attention drift detected: eyes drifted down."
+    elif head_pose == "GAZE_UP":
+        gaze = "SIDE_OR_UP"
+        verdict = "Attention drift detected: eyes drifted up."
 
     if talking and not is_critical:
         verdict += " Verbal activity detected — possible earpiece coaching."

@@ -74,8 +74,35 @@ def test_prune_drops_only_expired_sessions():
     print("PASS prune drops expired sessions only")
 
 
+def test_verdict_reports_the_focus_score_it_was_given():
+    """Pins the response field NAME, not just the value.
+
+    The frontend read `average_focus_score` off this response while the engine
+    has always returned `focus_score`. Missing field -> undefined -> `|| 0`, so
+    /report and /practice showed a confident "Focus Score 0" for every session
+    no matter how the candidate did. Nothing threw; the wrong number just
+    rendered. A key rename here has to break a test, not a screen.
+    """
+    engine = ConversationEngine()
+    session = _seed(engine)
+    for score in (90.0, 80.0):
+        session.focus_scores.append(score)
+
+    result = asyncio.run(engine.generate_final_verdict("abc123"))
+
+    assert "focus_score" in result, (
+        f"verdict response lost its focus_score key: {sorted(result)}"
+    )
+    assert result["focus_score"] == 85.0, (
+        f"expected the mean of the turn scores, got {result['focus_score']}"
+    )
+    assert result["turns_completed"] == session.current_turn
+    print("PASS verdict returns focus_score under the name the client reads")
+
+
 if __name__ == "__main__":
     test_session_survives_verdict()
     test_late_turn_gets_clear_error_not_missing_session()
     test_prune_drops_only_expired_sessions()
+    test_verdict_reports_the_focus_score_it_was_given()
     print("\nAll session lifecycle tests passed.")

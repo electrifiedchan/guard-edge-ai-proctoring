@@ -379,7 +379,11 @@ export default function PracticeGym() {
       const data = await res.json();
 
       setVerdictReport(data.report);
-      setAvgFocusScore(Math.round(data.average_focus_score || 0));
+      // The endpoint's field is `focus_score`. Reading `average_focus_score`
+      // here got undefined, and `|| 0` then presented the missing value as a
+      // real score of 0 — the reported "focus score always 0%" bug, while
+      // turns_completed (spelled the same on both sides) came through fine.
+      setAvgFocusScore(Math.round(data.focus_score ?? 0));
       setTurnsCompleted(data.turns_completed || 0);
       setPhase("verdict");
     } catch (err) {

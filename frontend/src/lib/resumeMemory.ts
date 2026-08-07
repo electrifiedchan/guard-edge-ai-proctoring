@@ -63,9 +63,19 @@ export function purgeLegacyResumeCache(): void {
     }
     doomed.forEach((key) => localStorage.removeItem(key));
 
-    // The pointer may name a resume that only existed in the legacy cache.
-    if (doomed.length && !getActiveResume()) {
-      localStorage.removeItem(ACTIVE_KEY);
+    // Drop the pointer only if it is malformed. It used to be dropped whenever
+    // its payload was missing, but the pointer now carries the candidate's
+    // identity (see activeCandidateId) — a purged legacy payload means the user
+    // must re-upload to practise, not that their past sessions are disowned.
+    const raw = localStorage.getItem(ACTIVE_KEY);
+    if (raw) {
+      let hash: string | undefined;
+      try {
+        hash = (JSON.parse(raw) as ActiveResume)?.hash;
+      } catch {
+        hash = undefined;
+      }
+      if (!hash) localStorage.removeItem(ACTIVE_KEY);
     }
   } catch {
     // nothing recoverable to do
@@ -96,11 +106,13 @@ export function getActiveResume(): ActiveResume | null {
     const record = JSON.parse(raw) as ActiveResume;
     if (!record?.hash || !record?.file_name) return null;
 
-    // The pointer is only useful if the payload behind it survives.
-    if (!readCache(record.hash)) {
-      localStorage.removeItem(ACTIVE_KEY);
-      return null;
-    }
+    // The pointer is only useful if the payload behind it survives — but report
+    // that by returning null, WITHOUT deleting the pointer. Erasing it here is
+    // what made the expiry permanent: /upload calls this on mount, so the first
+    // visit after the 24h cache TTL destroyed the hash, and with it the only
+    // link to the candidate's dashboard history. A missing parse means "you
+    // must re-upload to practise", not "your past sessions never happened".
+    if (!readCache(record.hash)) return null;
 
     return record;
   } catch {
@@ -124,8 +136,25 @@ export function getActiveResume(): ActiveResume | null {
 export const NO_RESUME_CANDIDATE_ID = "guard_no_active_resume";
 
 export function activeCandidateId(): string {
-  const active = getActiveResume();
-  return active?.hash ? `resume_${active.hash}` : NO_RESUME_CANDIDATE_ID;
+  // Deliberately NOT getActiveResume(): that gate exists to stop /upload
+  // offering a "continue" card whose payload has expired, and it *deletes* the
+  // pointer on a cache miss. Identity must outlive the 24h parse cache. Routed
+  // through the gate, a user's whole history detached the day after they
+  // practised — telemetry had been written under `resume_<hash>`, the dashboard
+  // then asked for `guard_no_active_resume`, and the empty state rendered as if
+  // they had never practised at all. Streak dark, trend flat, nothing thrown.
+  //
+  // The hash identifies the resume; the cached parse is only a speed-up. So
+  // read the pointer directly and let a stale cache mean "re-upload to start a
+  // session", never "you have no past".
+  try {
+    const raw = localStorage.getItem(ACTIVE_KEY);
+    if (!raw) return NO_RESUME_CANDIDATE_ID;
+    const record = JSON.parse(raw) as ActiveResume;
+    return record?.hash ? `resume_${record.hash}` : NO_RESUME_CANDIDATE_ID;
+  } catch {
+    return NO_RESUME_CANDIDATE_ID;
+  }
 }
 
 /** Read a cached parse, honouring the same TTL as the upload page. */

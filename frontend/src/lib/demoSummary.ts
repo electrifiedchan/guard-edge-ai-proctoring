@@ -1,4 +1,5 @@
 import type { DashboardSummary } from "@/lib/dashboard";
+import { localDateKey } from "@/lib/dashboard";
 
 /**
  * Fixture for `/dashboard?demo=1` — lets the populated state be reviewed with no
@@ -8,9 +9,14 @@ import type { DashboardSummary } from "@/lib/dashboard";
  */
 
 /**
- * Mirrors densifyActivity's date construction exactly (local midnight cursor,
- * UTC-sliced ISO). Generating demo dates any other way would offset them from
- * the grid the heatmap builds and silently drop cells.
+ * Mirrors densifyActivity's date construction exactly — local midnight cursor,
+ * keyed with the shared localDateKey. Generating demo dates any other way would
+ * offset them from the grid the heatmap builds and silently drop cells.
+ *
+ * This deliberately imports the same helper rather than restating the format:
+ * the two used to hold independent copies of the key construction, so the demo
+ * fixture faithfully reproduced the UTC off-by-one-day bug and made the broken
+ * grid look correct under `?demo=1` — the one view that should have exposed it.
  */
 function lastNDates(days: number): string[] {
   const cursor = new Date();
@@ -18,7 +24,7 @@ function lastNDates(days: number): string[] {
   cursor.setDate(cursor.getDate() - (days - 1));
   const out: string[] = [];
   for (let i = 0; i < days; i++) {
-    out.push(cursor.toISOString().slice(0, 10));
+    out.push(localDateKey(cursor));
     cursor.setDate(cursor.getDate() + 1);
   }
   return out;

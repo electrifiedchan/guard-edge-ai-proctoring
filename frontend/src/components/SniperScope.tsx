@@ -103,9 +103,50 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
     faces_detected: 0, // Better default so we don't spam multiple face alerts before real data
     is_talking: false,
     head_pose: "HEAD_CENTER",
-    gaze_vector: [0, 0]
+    gaze_vector: [0, 0],
+    // Pose agreed across consecutive rAF frames. Written alongside head_pose so
+    // the two can never disagree; without it, a single blink-misfire frame from
+    // the 30fps gatekeeper was stamped onto the whole 5s inference window as the
+    // frame verdict (telemetry is written per-frame but only READ on the 5s cadence).
+    stable_pose: "HEAD_CENTER" as string | null,
   });
   const gatekeeperRef = useRef<{ camera: any; faceMesh: any } | null>(null);
+
+  // Trailing window of per-frame pose calls, used to smooth the gatekeeper's
+  // ~30fps output down to the 5s reporting cadence. The inference loop reads
+  // telemetryRef at an arbitrary instant, so before this it was sampling ONE
+  // frame out of ~150 and calling that the verdict for the window — a single
+  // frame of iris jitter crossing GAZE_DELTA_Y was enough to report a drift
+  // while the user sat still. A frame has to be corroborated by its neighbours.
+  const poseWindowRef = useRef<{ t: number; pose: string }[]>([]);
+  const POSE_WINDOW_MS = 1500;
+  const POSE_MIN_SAMPLES = 3;
+
+  /**
+   * Records a frame's pose call and returns the modal pose across the trailing
+   * window, or null while the window is too thin or too split to trust.
+   */
+  const stablePose = (pose: string, now: number): string | null => {
+    poseWindowRef.current.push({ t: now, pose });
+    // Prune by TIME, not by count: the gatekeeper's frame rate varies with CPU
+    // load, so a fixed-length ring would cover a different real duration on a
+    // busy machine than on an idle one.
+    poseWindowRef.current = poseWindowRef.current.filter((s) => now - s.t <= POSE_WINDOW_MS);
+
+    const w = poseWindowRef.current;
+    if (w.length < POSE_MIN_SAMPLES) return null;
+    const counts = new Map<string, number>();
+    for (const s of w) counts.set(s.pose, (counts.get(s.pose) ?? 0) + 1);
+    let best: string | null = null;
+    let bestN = 0;
+    for (const [pose, n] of counts) {
+      if (n > bestN) { best = pose; bestN = n; }
+    }
+    // A plurality is not enough — with the window split three ways the "winner"
+    // can hold a third of the frames. Requiring more than half means a reported
+    // drift was the dominant read, not merely the most common noise.
+    return bestN * 2 > w.length ? best : null;
+  };
 
   // Stable reference to parent callback — prevents the inference loop from being
   // re-created on every parent render, which previously spawned parallel loop chains
@@ -269,6 +310,18 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
     gaze_up: "HEAD_UP",
     gaze_down: "HEAD_DOWN",
   };
+
+  // The label an iris-only deflection is reported under. Deliberately NOT the
+  // HEAD_* vocabulary: the pose field is narrated downstream as "head tilted X",
+  // so sending HEAD_DOWN for a read that came purely from the eyes asserts the
+  // head moved when it did not. Attention still drifted and is still flagged —
+  // the sensor that saw it just stays attached to the claim.
+  const GAZE_TO_DRIFT: Record<string, string> = {
+    gaze_left: "GAZE_LEFT",
+    gaze_right: "GAZE_RIGHT",
+    gaze_up: "GAZE_UP",
+    gaze_down: "GAZE_DOWN",
+  };
   const poseAxis = (p: string) =>
     p === "HEAD_LEFT" || p === "HEAD_RIGHT" ? "h" : p === "HEAD_UP" || p === "HEAD_DOWN" ? "v" : null;
 
@@ -322,8 +375,12 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
     // Case B4: a strong head deflection is not overruled by the iris at all.
     if (headPose !== "HEAD_CENTER" && headMagDeg >= HEAD_STRONG_DEG) return headPose;
 
-    // Case C: Eyes drift regardless of head pose → iris wins, this is the killer feature
-    if (gazeAsPose) return gazeAsPose;
+    // Case C: Eyes drift regardless of head pose → iris wins, this is the killer
+    // feature. Reported under GAZE_* rather than HEAD_*: the head is centred in
+    // this branch by construction (every headPose !== HEAD_CENTER path has
+    // already returned above), so calling it a head tilt is a claim about a
+    // sensor that did not fire. This is the "dead centre, says tilted down" bug.
+    if (gazeAsPose) return GAZE_TO_DRIFT[gazePose] ?? gazeAsPose;
 
     // Fallback
     return headPose;
@@ -658,7 +715,8 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
         faces_detected: faces,
         is_talking: talking,
         head_pose: pose,
-        gaze_vector: gazeVector
+        gaze_vector: gazeVector,
+        stable_pose: stablePose(pose, Date.now()),
       };
     });
 
@@ -811,6 +869,10 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
     }
     if (loopTimerRef.current) clearTimeout(loopTimerRef.current);
     loopRunningRef.current = false;
+    // Frames from the run that just ended must not corroborate frames from the
+    // next one — the pose window is trailing, so without this the first reading
+    // after a re-engage is a mix of two sessions' geometry.
+    poseWindowRef.current = [];
     // Reset calibration so a re-engage recalibrates against a fresh baseline
     // instead of inheriting the previous run's head-pose reference.
     calibrationRef.current.isCalibrating = false;
@@ -862,10 +924,17 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
 
       const base64Image = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
 
+      // The gatekeeper writes per-frame, the backend only ever hears the 5s loop.
+      // Forward the modal pose across the trailing window — not the last frame —
+      // so a single jittery or blinking frame cannot become the whole verdict.
+      // When the window has not agreed, there is no evidence of anything; report
+      // a centred pose rather than whichever noise happened to come last.
+      const pose = telemetryRef.current.stable_pose ?? "HEAD_CENTER";
+
       console.log("🚀 [FRONTEND] OUTGOING PAYLOAD:", {
         faces_detected: telemetryRef.current.faces_detected,
         is_talking: telemetryRef.current.is_talking,
-        head_pose: telemetryRef.current.head_pose,
+        head_pose: pose,
         gaze_vector: telemetryRef.current.gaze_vector
       });
 
@@ -890,7 +959,7 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
             image_base64: base64Image,
             faces_detected: telemetryRef.current.faces_detected,
             is_talking: telemetryRef.current.is_talking,
-            head_pose: telemetryRef.current.head_pose,
+            head_pose: pose,
             gaze_vector: telemetryRef.current.gaze_vector
           })
         });

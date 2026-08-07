@@ -131,6 +131,22 @@ export const heatmapWidth = HEATMAP.cols * (HEATMAP.cell + HEATMAP.gap) + HEATMA
 
 /** Fill missing days with count 0 so the heatmap grid is continuous. */
 
+/**
+ * Local calendar date of a Date, "YYYY-MM-DD". The backend keys every session
+ * by its LOCAL day (`date.fromtimestamp(...).isoformat()` in timeline.py), so
+ * the frontend grid keys must be local too. Using toISOString() here silently
+ * shifted every cell by the UTC offset — 18:30 the previous day from India —
+ * so today's cell queried a key the backend never wrote and today's session
+ * never lit the streak. The date is the one piece of this UI that is not
+ * UTC-safe.
+ */
+export const localDateKey = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
 export function densifyActivity(
   activity: ActivityDay[],
   days: number,
@@ -141,7 +157,7 @@ export function densifyActivity(
   cursor.setHours(0, 0, 0, 0);
   cursor.setDate(cursor.getDate() - (days - 1));
   for (let i = 0; i < days; i++) {
-    const iso = cursor.toISOString().slice(0, 10);
+    const iso = localDateKey(cursor);
     out.push({ date: iso.replace(/-/g, "/"), count: byDate.get(iso) ?? 0 });
     cursor.setDate(cursor.getDate() + 1);
   }
