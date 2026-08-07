@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState, useCallback, useImperativeHandle, type Ref } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { activeCandidateId } from "@/lib/resumeMemory";
+import PersonaPicker from "@/components/PersonaPicker";
+import { DEFAULT_PERSONA, type PersonaId } from "@/lib/personas";
 
 
 export interface RiskPacket {
@@ -21,16 +23,23 @@ export interface SniperScopeHandle {
 interface SniperScopeProps {
   onTelemetryUpdate: (packet: RiskPacket, verdict: string) => void;
   onDisengage?: () => void;
+  /**
+   * The pre-engage persona pick, lifted to the page so it can send
+   * `starting_persona` on session start. The ladder is seeded once — mid-run
+   * escalation is the engine's call — so the picker locks while scanning.
+   */
+  onPersonaChange?: (id: PersonaId) => void;
   ref?: Ref<SniperScopeHandle>;
 }
 
-export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: SniperScopeProps) {
+export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaChange, ref }: SniperScopeProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const loopTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const [isScanning, setIsScanning] = useState(false);
+  const [persona, setPersona] = useState<PersonaId>(DEFAULT_PERSONA);
   const [sysStatus, setSysStatus] = useState<"IDLE" | "ACTIVE" | "COMPROMISED">("IDLE");
   
   // Calibration State
@@ -1237,7 +1246,30 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
                 <div className="text-[var(--color-slate)]">&gt; load gatekeeper.face_mesh</div>
                 <div className="text-[var(--color-slate)]">&gt; attach camera.stream</div>
                 <div className="text-[var(--color-signal)]">&gt; ready: local inference only</div>
-                <div className="text-[var(--color-parchment)] mt-3">Press Engage sentry to begin behavioural analysis.</div>
+
+                {/* Pre-engage persona pick. Choosing before Engage is the whole
+                    point — the ladder is seeded at session start, so a pick made
+                    mid-run would be ignored. Locks while scanning. */}
+                <div className="mt-4 border-t border-[var(--color-hairline)] pt-4">
+                  <div className="flex items-baseline justify-between mb-2.5">
+                    <span className="text-[12px] font-semibold text-[var(--color-snow)]">
+                      Choose your interviewer
+                    </span>
+                    <span className="text-[10px] text-[var(--color-slate)]">
+                      Difficulty still ramps up as you go
+                    </span>
+                  </div>
+                  <PersonaPicker
+                    value={persona}
+                    onChange={(id) => {
+                      setPersona(id);
+                      onPersonaChange?.(id);
+                    }}
+                    compact
+                  />
+                </div>
+
+                <div className="text-[var(--color-parchment)] mt-4">Press Engage sentry to begin behavioural analysis.</div>
               </div>
             </div>
           </div>

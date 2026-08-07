@@ -25,29 +25,39 @@ Fixed in `frontend/src/app/sentry/page.tsx`:
   already closed.
 
 
-## 4. Persona choice belongs before engaging — PARTIALLY DONE
+## 4. Persona choice belongs before engaging — DONE (2026-08-07)
 
-Move the persona buttons (Friendly HR / Curious Peer / …) into SniperScope as a
-pre-engage choice, and make the selection actually reach the backend. Today
-`currentPersona` is only ever *read from* the server response, so the badge
-reflects the backend's pick and the user has no say. Requires passing the chosen
-persona on session start.
+The pre-engage selector now lives in `SniperScope`'s idle panel, above the
+Engage button, and the choice reaches the backend on both surfaces.
 
-Done so far:
+What landed:
 
-- Backend accepts a caller-supplied persona on session start and seeds the
-  escalation ladder from it, rather than always starting at the top
-  (`backend/core_memory/conversation_engine.py`, `backend/edge_main.py`).
-- The `/practice` surface has the pre-engage selector wired end to end: the
-  choice is held in React state, sent on start, and reset when the session ends.
+- Backend already accepted a caller-supplied persona and seeded the escalation
+  ladder from it (`conversation_engine.py`, `edge_main.py`) — unchanged.
+- `frontend/src/lib/personas.ts` (new) holds the ids, labels, copy and
+  `DEFAULT_PERSONA`. `/practice` and `/sentry` each had their own copy of this
+  table and had already drifted: practice used theme tokens for the badge
+  colours, sentry still used raw Tailwind shades that fall to roughly 2:1
+  contrast on the light theme. Both now import.
+- `frontend/src/components/PersonaPicker.tsx` (new) holds the `role="radiogroup"`
+  selector markup once, with a `compact` variant for the scope's smaller panel.
+  `/practice`'s inline copy was replaced with it.
+- `SniperScope` owns the pick and reports it up via `onPersonaChange`; `/sentry`
+  mirrors it into `startingPersona` and sends `starting_persona` on
+  `start-session`.
 
-Still open — the half this item actually names:
+Note for future edits: the scope owns the pick, so `/sentry` must NOT reset
+`startingPersona` when a session ends. An early version did, which desynced the
+page from the still-highlighted button in the scope — the user would see Tech
+Lead selected and get Friendly HR. The reset was removed; `SniperScope`'s own
+state is the single source of truth.
 
-- `/sentry` (`frontend/src/app/sentry/page.tsx`) still only *reads*
-  `data.persona` off the start-session and per-turn responses; it never sends
-  one, so the badge there remains the backend's pick. `SniperScope.tsx` has no
-  persona code at all yet, so the pre-engage buttons still need to be built into
-  it and threaded up to the page's `start-session` call.
+Pinned by `backend/test_persona_contract.py` (6 tests, in `run_tests.bat`).
+The ids are a wire contract and `create_session` falls back to friendly_hr with
+only a log line on an unknown value — so a frontend typo would be invisible,
+looking identical to a genuine Friendly HR pick. The test hand-copies the
+frontend id list on purpose so it breaks when either side is edited alone;
+verified non-vacuous by injecting both a typo and a reorder.
 
 
 ## 5. Back button on the verdict image view — DONE
@@ -79,7 +89,7 @@ key is missing, same for `/report` and `/verdict`), so an effect here would be
 one more racing `router.push` in the same tick. Running before hydration means
 the reloaded route never mounts — no flash of a half-built page, no race.
 
-## 7. Per-resume memory — MOSTLY DONE
+## 7. Per-resume memory — DONE
 
 Memory is now keyed by resume identity instead of one global literal.
 
@@ -101,16 +111,26 @@ sessions, streak and trend.
 - A browser with no resume gets `guard_no_active_resume`, which has no history —
   so it renders the empty state rather than a stranger's numbers.
 
-Still open:
+Closed 2026-08-07 — the two leftovers above, resolved:
 
-- Rows already written under the old hardcoded id are now orphaned: they are no
-  longer attributed to any resume, so they simply stop appearing. That is the
-  desired end state, but the old rows are still sitting in the DB and nothing
-  prunes them.
-- I did not verify whether the backend still *seeds* demo rows under that literal
-  on startup. If it does, that seeding is now dead weight and should be removed.
-  (Note: `?demo=1` on the dashboard is a separate, deliberate design-review path
-  and should stay.)
+- **Orphaned rows pruned.** `backend/prune_legacy_candidate.py` deletes rows whose
+  `session_id` is the legacy literal or is prefixed `major_project_candidate_01__`
+  (the per-run grain). It dry-runs by default, `--apply` copies the DB to a
+  timestamped `.bak` first, then deletes inside one transaction. Removed 219 rows
+  (11 sessions, 185 timeline_frames, 23 moments); 9 sessions / 258 frames / 106
+  moments survive, all `resume_<hash>` except the `test_mr1` fixture. Backup at
+  `backend/guard_telemetry.db.<stamp>.bak`. Re-running reports "already pruned",
+  so it is idempotent and safe to leave in place.
+- **No demo seeding exists** — that concern was unfounded. Nothing in the backend
+  writes rows on startup; the only remaining reference to the literal was a
+  *default parameter* on `/reset-session` (`edge_main.py`), which is worse than
+  dead weight: a caller omitting `candidate_id` got a cheerful "Memory cleared."
+  for an identity no resume can produce, while the BEA state it meant to clear
+  stayed latched. Now a required parameter — every real caller already passes one.
+  (`?demo=1` is untouched: it builds from the local `demoSummary.ts` fixture and
+  never reaches the backend. Its cosmetic `candidate_id` was the old literal, now
+  shaped like a real `resume_<hash>` so the fixture stops modelling an identity
+  the app can no longer produce.)
 - **Reviewed 2026-08-07: separation itself works, but two review findings.**
   First, the dashboard grid keys and the backend session-day keys disagreed by
   one UTC offset — that is 12d, fixed separately. Second, a real survivability

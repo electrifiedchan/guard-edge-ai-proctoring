@@ -75,7 +75,12 @@ export function buildDemoSummary(days: number): DashboardSummary {
 
   return {
     candidate: {
-      candidate_id: "major_project_candidate_01",
+      // Shaped like a real per-resume id (`resume_<hash>`) rather than the old
+      // hardcoded `major_project_candidate_01`. That literal is now pruned from
+      // the database and rejected as an identity, so leaving it here made the
+      // fixture model a candidate the app can no longer produce — the same class
+      // of mistake as the date-format copy above.
+      candidate_id: "resume_demofixture0000000000000000000000000000000000000000000000000000",
       display_name: "Aarav Sharma",
       preferred_name: null,
     },

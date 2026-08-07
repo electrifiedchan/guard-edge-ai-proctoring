@@ -101,6 +101,8 @@ frontend/public/mediapipe/
 # built or run, so they stay local.
 .clinerules
 .clineignore
+.claude/settings.json
+.claude/settings.local.json
 
 
 # ─── Personal test data (never commit real resumes) ──────────────────────────

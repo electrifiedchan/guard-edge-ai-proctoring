@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { User, Bot } from "lucide-react";
 import SniperScope, { RiskPacket, SniperScopeHandle } from "@/components/SniperScope";
+import { PERSONA_LABELS, DEFAULT_PERSONA, type PersonaId } from "@/lib/personas";
 import VoiceOrb, { VoiceState } from "@/components/VoiceOrb";
 import LoadingOverlay from "@/components/LoadingOverlay";
 import DashboardButton from "@/components/DashboardButton";
@@ -22,12 +23,6 @@ type TurnState = "ai-speaking" | "listening" | "processing" | "idle";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8080";
 
-const PERSONA_LABELS: Record<string, { label: string; color: string }> = {
-  friendly_hr: { label: "Friendly HR", color: "text-emerald-400" },
-  curious_peer: { label: "Curious Peer", color: "text-sky-400" },
-  skeptical_tech_lead: { label: "Tech Lead", color: "text-amber-400" },
-};
-
 export default function SentryPage() {
   const router = useRouter();
   const sniperRef = useRef<SniperScopeHandle>(null);
@@ -37,7 +32,14 @@ export default function SentryPage() {
   const [sessionId, setSessionId] = useState("");
   const sessionIdRef = useRef("");
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
-  const [currentPersona, setCurrentPersona] = useState("friendly_hr");
+  // Two different things, deliberately two states. `currentPersona` is whatever
+  // rung the engine reports *now* — it escalates on its own, so it drifts away
+  // from the pick mid-session and drives the badge. `startingPersona` is the
+  // user's pre-engage choice, mirrored up from the scope's picker via
+  // onPersonaChange so start-session can seed the ladder with it. The scope
+  // holds the source of truth; this copy is a mirror, not a second owner.
+  const [currentPersona, setCurrentPersona] = useState<string>(DEFAULT_PERSONA);
+  const [startingPersona, setStartingPersona] = useState<PersonaId>(DEFAULT_PERSONA);
   const [turnState, setTurnState] = useState<TurnState>("idle");
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [error, setError] = useState("");
@@ -155,6 +157,12 @@ export default function SentryPage() {
     interviewStartedRef.current = false;
     setLiveTranscript("SENTRY DISENGAGED. PRESS ENGAGE TO RESUME.");
     setChatHistory([]);
+    // Deliberately NOT resetting startingPersona here. The scope owns that state
+    // and its picker is on screen in the idle panel, so the pick stays visible
+    // and survives a Disengage/Engage cycle. Resetting it from this side would
+    // leave the page sending friendly_hr while the picker still showed Tech Lead
+    // — practice resets because its handleReset tears down to the upload screen,
+    // which unmounts the picker entirely. Different situation, different rule.
   }, [stopListening]);
 
   // Always points at the current render's startInterviewFlow. handleTelemetry
@@ -195,7 +203,11 @@ export default function SentryPage() {
       const res = await fetch(`${API_BASE}/api/v1/interview/start-session`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resume_text, questions }),
+        body: JSON.stringify({
+          resume_text,
+          questions,
+          starting_persona: startingPersona,
+        }),
       });
 
       if (!res.ok) throw new Error("Failed to start session");
@@ -225,8 +237,11 @@ export default function SentryPage() {
       interviewStartedRef.current = false;
       setInterviewActive(false);
     }
-  }, [speakText, startListening]);
+  }, [startingPersona, speakText, startListening]);
 
+  // Reassigned every render, which is what makes the persona pick reach the
+  // backend: handleTelemetry is bound into SniperScope once and calls through
+  // this ref, so it always invokes the newest closure rather than render 1's.
   startInterviewFlowRef.current = startInterviewFlow;
 
   // VAD speech end
@@ -427,7 +442,12 @@ export default function SentryPage() {
       <div className="w-full max-w-[1400px] flex flex-col xl:flex-row gap-4 flex-1 min-h-0">
         {/* Vision Sentry (left) */}
         <div className="flex-1 min-h-0 min-w-0">
-          <SniperScope ref={sniperRef} onTelemetryUpdate={handleTelemetry} onDisengage={handleDisengage} />
+          <SniperScope
+            ref={sniperRef}
+            onTelemetryUpdate={handleTelemetry}
+            onDisengage={handleDisengage}
+            onPersonaChange={setStartingPersona}
+          />
         </div>
 
         {/* Right sidebar — VoiceOrb + Transcript/Chat */}

@@ -876,8 +876,14 @@ async def get_candidate_status(candidate_id: str):
     return await bea_engine.get_state(candidate_id)
 
 
+# candidate_id is required. It used to default to the old hardcoded
+# `major_project_candidate_01`, which outlived the move to per-resume identity
+# (`resume_<hash>`, see frontend/src/lib/resumeMemory.ts): a caller that omitted
+# the parameter got a successful "Memory cleared." for an identity no resume can
+# produce, while the BEA state it meant to clear stayed latched. Failing with a
+# 422 is the honest answer — every real caller already passes one.
 @app.post("/reset-session")
-async def reset_session(candidate_id: str = "major_project_candidate_01"):
+async def reset_session(candidate_id: str):
     await bea_engine.reset_candidate(candidate_id)
     # Re-arm the prop sweep. Without this a phone still sitting in frame when
     # the user hits "Clear memory" stays latched as already-seen, so it would

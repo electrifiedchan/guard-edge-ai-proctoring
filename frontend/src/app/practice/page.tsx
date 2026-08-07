@@ -19,6 +19,8 @@ import {
 } from "lucide-react";
 import FocusPIP from "@/components/FocusPIP";
 import DashboardButton from "@/components/DashboardButton";
+import PersonaPicker from "@/components/PersonaPicker";
+import { PERSONA_LABELS, DEFAULT_PERSONA, type PersonaId } from "@/lib/personas";
 import { useVAD } from "@/hooks/useVAD";
 
 type Question = {
@@ -44,46 +46,6 @@ const LOADING_MESSAGES = [
   "Generating behavioral questions…",
 ];
 
-// Colors are theme tokens, not raw Tailwind shades. The old values
-// (emerald-400 / sky-400 / amber-400) were tuned for the dark canvas and
-// dropped to ~2:1 contrast on the light theme's white surface.
-const PERSONA_LABELS: Record<string, { label: string; color: string }> = {
-  friendly_hr: { label: "Friendly HR", color: "text-[var(--color-signal)]" },
-  curious_peer: { label: "Curious Peer", color: "text-[var(--color-info)]" },
-  skeptical_tech_lead: { label: "Tech Lead", color: "text-[var(--color-warn)]" },
-};
-
-// The rung the interview opens on. The engine still escalates from here, so
-// this sets where the ramp begins rather than pinning the whole session.
-const PERSONA_OPTIONS = [
-  {
-    id: "friendly_hr",
-    label: "Friendly HR",
-    tagline: "Warm open",
-    blurb: "Rapport first. Eases in with broad questions before any technical depth.",
-    accent: "var(--color-signal)",
-    Icon: User,
-  },
-  {
-    id: "curious_peer",
-    label: "Curious Peer",
-    tagline: "Straight in",
-    blurb: "Skips small talk. Opens on your resume's fundamentals and digs a level deeper.",
-    accent: "var(--color-info)",
-    Icon: Brain,
-  },
-  {
-    id: "skeptical_tech_lead",
-    label: "Tech Lead",
-    tagline: "Full pressure",
-    blurb: "Probing from turn one — scale, tradeoffs, and failure modes.",
-    accent: "var(--color-warn)",
-    Icon: Target,
-  },
-] as const;
-
-type PersonaId = (typeof PERSONA_OPTIONS)[number]["id"];
-
 /** Composure score → theme token. The thresholds (80 / 50) match the backend's
  *  Excellent / Moderate / Needs-Improvement bands in generate_final_verdict. */
 function scoreTone(score: number): string {
@@ -106,8 +68,8 @@ export default function PracticeGym() {
   const [sessionId, setSessionId] = useState("");
   const sessionIdRef = useRef("");
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
-  const [currentPersona, setCurrentPersona] = useState("friendly_hr");
-  const [startingPersona, setStartingPersona] = useState<PersonaId>("friendly_hr");
+  const [currentPersona, setCurrentPersona] = useState<string>(DEFAULT_PERSONA);
+  const [startingPersona, setStartingPersona] = useState<PersonaId>(DEFAULT_PERSONA);
   const [turnState, setTurnState] = useState<TurnState>("idle");
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -237,8 +199,8 @@ export default function PracticeGym() {
     setSessionId("");
     sessionIdRef.current = "";
     setChatHistory([]);
-    setCurrentPersona("friendly_hr");
-    setStartingPersona("friendly_hr");
+    setCurrentPersona(DEFAULT_PERSONA);
+    setStartingPersona(DEFAULT_PERSONA);
     setTurnState("idle");
     setFocusScore(100);
     setVerdictReport("");
@@ -594,75 +556,7 @@ export default function PracticeGym() {
                   </span>
                 </div>
 
-                <div
-                  role="radiogroup"
-                  aria-label="Interviewer style"
-                  className="grid gap-3 sm:grid-cols-3"
-                >
-                  {PERSONA_OPTIONS.map(({ id, label, tagline, blurb, accent, Icon }) => {
-                    const selected = startingPersona === id;
-                    return (
-                      <button
-                        key={id}
-                        type="button"
-                        role="radio"
-                        aria-checked={selected}
-                        onClick={() => setStartingPersona(id)}
-                        style={
-                          {
-                            borderColor: selected ? accent : undefined,
-                            // color-mix keeps the tint derived from the same token
-                            // the theme already swapped, so the wash works on the
-                            // dark canvas and the light surface without a second palette.
-                            backgroundColor: selected
-                              ? `color-mix(in srgb, ${accent} 10%, transparent)`
-                              : undefined,
-                          } as React.CSSProperties
-                        }
-                        className={`group relative text-left rounded-lg p-4 border transition-all cursor-pointer
-                          focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-signal)]
-                          ${
-                            selected
-                              ? "shadow-sm"
-                              : "border-[var(--color-hairline)] bg-[var(--color-surface)] hover:border-[var(--color-hairline-strong)]"
-                          }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <Icon
-                            size={15}
-                            style={{ color: selected ? accent : undefined }}
-                            className={selected ? "" : "text-[var(--color-slate)]"}
-                          />
-                          <span
-                            className="text-sm font-semibold text-[var(--color-snow)]"
-                          >
-                            {label}
-                          </span>
-                          {selected && (
-                            <motion.span
-                              layoutId="persona-check"
-                              className="ml-auto w-1.5 h-1.5 rounded-full"
-                              style={{ backgroundColor: accent }}
-                            />
-                          )}
-                        </div>
-
-                        <span
-                          className="mt-2 inline-block text-[10px] font-medium uppercase tracking-wider"
-                          style={{ color: selected ? accent : undefined }}
-                        >
-                          <span className={selected ? "" : "text-[var(--color-fog)]"}>
-                            {tagline}
-                          </span>
-                        </span>
-
-                        <p className="mt-1.5 text-xs leading-relaxed text-[var(--color-slate)]">
-                          {blurb}
-                        </p>
-                      </button>
-                    );
-                  })}
-                </div>
+                <PersonaPicker value={startingPersona} onChange={setStartingPersona} />
               </div>
 
               {/* CTA */}

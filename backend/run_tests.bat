@@ -15,3 +15,6 @@ if errorlevel 1 exit /b 1
 echo.
 "%ROOT%\venv\Scripts\python.exe" test_verdict_narration.py
 if errorlevel 1 exit /b 1
+echo.
+"%ROOT%\venv\Scripts\python.exe" test_persona_contract.py
+if errorlevel 1 exit /b 1
