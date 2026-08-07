@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState, useCallback, useImperativeHandle, type Ref } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { activeCandidateId } from "@/lib/resumeMemory";
+
 
 export interface RiskPacket {
   candidate_id: string;
@@ -35,11 +37,19 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
   const [isCalibrating, setIsCalibrating] = useState(false);
   const calibrationRef = useRef({
     isCalibrating: false,
-    samples: [] as { pitchRatio: number, noseX: number, gazeX: number, gazeY: number }[],
+    // pitchDeg/yawDeg are true degrees off the 3D face normal. They were named
+    // pitchRatio/noseX back when pitch was a forehead/chin proportion and yaw was
+    // a raw nose x — different units entirely, so the names are not kept as
+    // aliases; a "ratio" holding degrees is how a sign bug hides in plain sight.
+    samples: [] as { pitchDeg: number, yawDeg: number, gazeX: number, gazeY: number, eyeW: number, faceH: number }[],
     baselinePitch: null as number | null,
     baselineYaw: null as number | null,
     baselineGazeX: null as number | null,
     baselineGazeY: null as number | null,
+    // Head-on reference geometry. These two are what make the iris offsets
+    // yaw-invariant — see the YAW-INVARIANT NORMALISER note in the mesh handler.
+    baselineEyeW: null as number | null,
+    baselineFaceH: null as number | null,
     startTime: 0
   });
   
@@ -50,7 +60,20 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
   const [latestVerdict, setLatestVerdict] = useState("SYSTEM STANDBY");
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
-  const CANDIDATE_ID = "major_project_candidate_01";
+  // Identity for this run, scoped to the resume being practised with.
+  //
+  // This was a hardcoded literal, which meant every resume on the machine wrote
+  // into one shared timeline — upload a different CV and the dashboard still
+  // showed the old one's sessions. The dashboard reads through the same helper,
+  // so the write and the read cannot drift apart.
+  //
+  // Resolved once per mount via a ref rather than on every render: it reads
+  // localStorage (unavailable during the server render, and it must not change
+  // underneath a run that is already recording).
+  const candidateIdRef = useRef<string>("");
+  if (!candidateIdRef.current) candidateIdRef.current = activeCandidateId();
+  const CANDIDATE_ID = candidateIdRef.current;
+
 
   // One id per practice run, minted at mount. Two distinct grains:
   //   CANDIDATE_ID -> stable identity (BEA lockout, /status, /reset-session)
@@ -134,62 +157,174 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
   };
 
   // --- 1.5 DYNAMIC POSE CLASSIFICATION ---
-  const classifyPose = (pitchRatio: number, noseX: number, baselinePitch: number | null, baselineYaw: number | null) => {
-    const PITCH_DELTA = 0.35;
-    const YAW_DELTA = 0.10;
-    
-    if (baselinePitch !== null && baselineYaw !== null) {
-      if (pitchRatio > baselinePitch + PITCH_DELTA) return "HEAD_DOWN";
-      if (pitchRatio < baselinePitch - PITCH_DELTA) return "HEAD_UP";
-      if (noseX < baselineYaw - YAW_DELTA) return "HEAD_RIGHT";
-      if (noseX > baselineYaw + YAW_DELTA) return "HEAD_LEFT";
-      return "HEAD_CENTER";
+  //
+  // Thresholds are real degrees of head rotation now, not opaque ratio deltas.
+  // The reference MediaPipe/solvePnP implementations gate at ~10 deg; we sit a
+  // little above that because our angles come from the mesh's z channel, which
+  // is noisier than a full PnP solve.
+  const PITCH_DELTA_DEG = 13;
+  const YAW_DELTA_DEG = 16;
+  // A deflection this large is not a webcam sitting slightly off-axis or mesh
+  // jitter — it is a deliberate head movement. Used by fuseSensors to decide
+  // when the iris is allowed to overrule the head. See notes there.
+  const HEAD_STRONG_DEG = 22;
+
+  const classifyPose = (
+    pitchDeg: number,
+    yawDeg: number,
+    baselinePitch: number | null,
+    baselineYaw: number | null,
+  ) => {
+    // Baseline-relative, because a laptop lid puts the lens well below eye level
+    // and the resting face normal is genuinely pitched. Absolute angles would
+    // read that fixed offset as a permanent look-away.
+    const dPitch = pitchDeg - (baselinePitch ?? 0);
+    const dYaw = yawDeg - (baselineYaw ?? 0);
+
+    // Yaw is still tested first, but now only to pick a winner when both axes
+    // fire at once — the axes are independent in a 3D frame, so this is a
+    // tie-break, not the correctness crutch it used to be.
+    if (Math.abs(dYaw) > YAW_DELTA_DEG && Math.abs(dYaw) / YAW_DELTA_DEG >= Math.abs(dPitch) / PITCH_DELTA_DEG) {
+      return dYaw > 0 ? "HEAD_LEFT" : "HEAD_RIGHT";
     }
-    
-    // Fallback if calibration failed (< 30 samples)
-    if (pitchRatio > 1.4) return "HEAD_DOWN";
-    if (pitchRatio < 0.7) return "HEAD_UP";
-    if (noseX < 0.40) return "HEAD_RIGHT";
-    if (noseX > 0.60) return "HEAD_LEFT";
+    if (Math.abs(dPitch) > PITCH_DELTA_DEG) {
+      return dPitch > 0 ? "HEAD_DOWN" : "HEAD_UP";
+    }
+    if (Math.abs(dYaw) > YAW_DELTA_DEG) {
+      return dYaw > 0 ? "HEAD_LEFT" : "HEAD_RIGHT";
+    }
     return "HEAD_CENTER";
   };
 
-  const GAZE_DELTA = 0.15;
+  // How far the head is off its baseline, in degrees, on whichever axis is
+  // furthest out. Feeds the strong-deflection rule in fuseSensors.
+  const poseMagnitudeDeg = (
+    pitchDeg: number,
+    yawDeg: number,
+    baselinePitch: number | null,
+    baselineYaw: number | null,
+  ) => Math.max(
+    Math.abs(pitchDeg - (baselinePitch ?? 0)),
+    Math.abs(yawDeg - (baselineYaw ?? 0)),
+  );
 
+  // Separate thresholds per axis. Both offsets are normalised by eye WIDTH, and
+  // the eye is far wider than it is tall, so a vertical look-away moves the iris
+  // through a much smaller fraction of that width than a horizontal one. A single
+  // shared threshold would either miss every vertical drift or fire constantly on
+  // horizontal noise.
+  const GAZE_DELTA_X = 0.10;
+  const GAZE_DELTA_Y = 0.055;
+
+  /**
+   * Iris direction, relative to the calibrated baseline.
+   *
+   * Naming is SUBJECT-relative ("gaze_left" = the user looked to their own left),
+   * matching classifyPose, which calls a nose displaced toward image-right
+   * HEAD_LEFT. The feed is not mirrored, so subject-left appears at image-right —
+   * hence the inversion on the x comparison below. Keeping one convention across
+   * both classifiers is what lets fuseSensors compare them at all.
+   *
+   * `irisUsable === false` means a blink or a degenerate mesh. That is reported as
+   * "unknown", NOT as "center": fuseSensors treats a centred iris as positive
+   * evidence the user is on-screen and vetoes head pose with it, so returning
+   * "center" here would suppress a genuine look-away every time the user blinked
+   * through it. "unknown" is the no-opinion value, and it hands the call to the head.
+   */
   const classifyGaze = (
     gazeX: number, gazeY: number,
-    baselineGazeX: number | null, baselineGazeY: number | null
+    baselineGazeX: number | null, baselineGazeY: number | null,
+    irisUsable: boolean,
   ): string => {
+    if (!irisUsable) return "unknown";
+
     const bx = baselineGazeX !== null ? baselineGazeX : 0;
     const by = baselineGazeY !== null ? baselineGazeY : 0;
-    
+
     const dx = gazeX - bx;
     const dy = gazeY - by;
-    
-    if (Math.abs(dx) > Math.abs(dy)) {
-      if (dx > GAZE_DELTA) return "gaze_right";
-      if (dx < -GAZE_DELTA) return "gaze_left";
-    } else {
-      if (dy > GAZE_DELTA) return "gaze_down";
-      if (dy < -GAZE_DELTA) return "gaze_up";
+
+    // Compare each axis against its own threshold before deciding which wins,
+    // rather than comparing raw magnitudes: dx and dy are on different scales
+    // now, so |dx| > |dy| would hand almost every frame to the x axis.
+    const xFires = Math.abs(dx) > GAZE_DELTA_X;
+    const yFires = Math.abs(dy) > GAZE_DELTA_Y;
+
+    if (xFires && (!yFires || Math.abs(dx) / GAZE_DELTA_X >= Math.abs(dy) / GAZE_DELTA_Y)) {
+      return dx > 0 ? "gaze_left" : "gaze_right";
+    }
+    if (yFires) {
+      return dy > 0 ? "gaze_down" : "gaze_up";
     }
     return "center";
   };
 
+
   // === SENSOR FUSION ===
-  const fuseSensors = (headPose: string, gazePose: string): string => {
+  //
+  // Maps an iris call onto the head vocabulary so the two can be compared.
+  const GAZE_TO_POSE: Record<string, string> = {
+    gaze_left: "HEAD_LEFT",
+    gaze_right: "HEAD_RIGHT",
+    gaze_up: "HEAD_UP",
+    gaze_down: "HEAD_DOWN",
+  };
+  const poseAxis = (p: string) =>
+    p === "HEAD_LEFT" || p === "HEAD_RIGHT" ? "h" : p === "HEAD_UP" || p === "HEAD_DOWN" ? "v" : null;
+
+  const fuseSensors = (headPose: string, gazePose: string, headMagDeg: number): string => {
+    const gazeAsPose = GAZE_TO_POSE[gazePose] ?? null;
+
+    // "unknown" is a blink or an unusable iris read, NOT a centred eye. Treating
+    // the two as the same thing is why looking down used to vanish: dropping the
+    // eyes narrows the lids, the iris read was discarded as "center", and Case B
+    // below then vetoed a perfectly good head-down into HEAD_CENTER. With no iris
+    // opinion available the head is the only sensor left, so it is believed.
+    if (gazePose === "unknown") return headPose;
+
     // Case A: Both agree on center → clean center
     if (headPose === "HEAD_CENTER" && gazePose === "center") return "HEAD_CENTER";
-    // Case B: Head deflects but eyes are centered → eyes veto (laptop tilt false positive)
-    if (headPose !== "HEAD_CENTER" && gazePose === "center") return "HEAD_CENTER";
-    // Case C: Eyes drift regardless of head pose → iris wins, this is the killer feature
-    if (gazePose !== "center") {
-      if (gazePose === "gaze_right") return "HEAD_RIGHT";
-      if (gazePose === "gaze_left") return "HEAD_LEFT";
-      if (gazePose === "gaze_up") return "HEAD_UP";
-      if (gazePose === "gaze_down") return "HEAD_DOWN";
-      return gazePose;
+
+    // Case B: head deflects, eyes centred → normally the eyes veto, which is what
+    // suppresses a tilted laptop lid reading as a permanent look-away. But a lid
+    // tilt is a few degrees; past HEAD_STRONG_DEG the head has genuinely moved and
+    // eyes centred *in their sockets* just means they travelled with it. Vetoing
+    // there hid the most obvious cheat there is — looking down at a lap.
+    if (headPose !== "HEAD_CENTER" && gazePose === "center") {
+      return headMagDeg >= HEAD_STRONG_DEG ? headPose : "HEAD_CENTER";
     }
+
+    // Case B2: the sensors disagree on AXIS — the head reads a side turn while the
+    // iris reads a vertical drift. They cannot both describe one movement, so
+    // promoting the iris (Case C) turned a real right turn into HEAD_UP.
+    //
+    // On a side turn the vertical iris channel is the weaker of the two: the eye is
+    // foreshortened and the far one is partly self-occluded, whereas the 3D face
+    // normal stays well conditioned. So the head keeps its horizontal call here.
+    if (poseAxis(headPose) === "h" && poseAxis(gazeAsPose ?? "") === "v") return headPose;
+
+    // Case B3: same axis, OPPOSITE directions. This is the other half of the
+    // "I looked down and it said up" bug, and it survives the geometry fix above
+    // because it is anatomy rather than maths: drop your chin while still reading
+    // the screen and the eyes counter-roll UP in their sockets. The iris genuinely
+    // points up relative to the face; the face is pointing down. Only one of those
+    // describes where the attention went, and it is the head — the counter-roll
+    // exists precisely to keep the eyes where they already were.
+    if (
+      gazeAsPose &&
+      poseAxis(headPose) !== null &&
+      poseAxis(headPose) === poseAxis(gazeAsPose) &&
+      headPose !== gazeAsPose
+    ) {
+      return headPose;
+    }
+
+    // Case B4: a strong head deflection is not overruled by the iris at all.
+    if (headPose !== "HEAD_CENTER" && headMagDeg >= HEAD_STRONG_DEG) return headPose;
+
+    // Case C: Eyes drift regardless of head pose → iris wins, this is the killer feature
+    if (gazeAsPose) return gazeAsPose;
+
     // Fallback
     return headPose;
   };
@@ -241,81 +376,221 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
           talking = true;
         }
 
-        // 2. Head Pose (Yaw/Pitch) using Empirical 2D Morphological Ratios
-        const nose = primary[1];
-        
-        // PITCH (Up/Down) via Forehead vs. Chin proportion
+        // 2. Head Pose — TRUE 3D FACE NORMAL, in degrees.
+        //
+        // This replaces two 2D projection ratios (forehead/chin proportion for
+        // pitch, nose-between-eye-corners for yaw) that were the root cause of
+        // "I looked down and it said head up".
+        //
+        // Why the old pitch ratio could invert the sign: forehead(10) and
+        // chin(152) sit on opposite faces of a curved skull, so a pitch rotation
+        // moves them toward and away from the camera at the same time. The 2D
+        // y-gap between them is therefore NOT monotonic in pitch — it shrinks on
+        // the way down, bottoms out, then grows again as the crown comes over the
+        // top. Past that turning point "further down" reads as a smaller ratio,
+        // which is exactly the HEAD_UP branch. No threshold tuning can fix a
+        // non-monotonic signal; the geometry has to change.
+        //
+        // MediaPipe already gives a z per landmark, so we can build the face's
+        // own coordinate frame and read the orientation off it directly:
+        //   right = outer eye corner -> outer eye corner
+        //   up    = chin -> forehead
+        //   fwd   = right x up       (the direction the face actually points)
+        // pitch/yaw are then the elevation/azimuth of fwd, in degrees. Both are
+        // monotonic across the full range and each axis is independent of the
+        // other, which also removes the yaw-contaminates-pitch coupling the old
+        // code had to work around by ordering its comparisons.
         const forehead = primary[10];
         const chin = primary[152];
-        
-        const foreheadToNose = nose.y - forehead.y;
-        const noseToChin = chin.y - nose.y;
-        const pitchRatio = foreheadToNose / noseToChin;
-
-        // YAW (Left/Right) via normalized Eye bounds
         const leftEye = primary[33];
         const rightEye = primary[263];
-        const dx = rightEye.x - leftEye.x;
-        let noseX = 0.5;
-        if (dx !== 0) {
-          // How far is the nose from the left eye?
-          noseX = (nose.x - leftEye.x) / dx;
+
+        // MediaPipe normalises x by frame WIDTH and y by frame HEIGHT, while z is
+        // on roughly the same scale as x. Left unconverted, y is stretched by the
+        // aspect ratio relative to the other two axes and every angle below comes
+        // out wrong. Scaling y by H/W puts all three axes in one unit.
+        const vw = videoEl.videoWidth || 640;
+        const vh = videoEl.videoHeight || 360;
+        const aspect = vw > 0 ? vh / vw : 1;
+        const p3 = (l: { x: number; y: number; z: number }) => ({
+          x: l.x,
+          y: l.y * aspect,
+          z: l.z ?? 0,
+        });
+
+        const sub3 = (a: {x:number,y:number,z:number}, b: {x:number,y:number,z:number}) =>
+          ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
+        const cross3 = (a: {x:number,y:number,z:number}, b: {x:number,y:number,z:number}) => ({
+          x: a.y * b.z - a.z * b.y,
+          y: a.z * b.x - a.x * b.z,
+          z: a.x * b.y - a.y * b.x,
+        });
+
+        // Image axes are x-right, y-DOWN, z-into-screen (MediaPipe: smaller z is
+        // nearer the camera). That triple is right-handed, so for a face square to
+        // the lens right x up = (0,0,-1) — the normal points back at the camera.
+        const rightVec = sub3(p3(rightEye), p3(leftEye));
+        const upVec = sub3(p3(forehead), p3(chin));
+        const fwd = cross3(rightVec, upVec);
+        const fwdLen = Math.sqrt(fwd.x ** 2 + fwd.y ** 2 + fwd.z ** 2);
+
+        const RAD2DEG = 180 / Math.PI;
+        const clamp1 = (v: number) => (v < -1 ? -1 : v > 1 ? 1 : v);
+
+        // Sign conventions, chosen to match the existing HEAD_* vocabulary:
+        //   pitchDeg > 0  → face normal tilted toward +y (down)  → HEAD_DOWN
+        //   yawDeg   > 0  → face normal tilted toward +x (image-right).
+        // The feed is not mirrored, so image-right is the subject's OWN left —
+        // hence positive yaw is HEAD_LEFT, the same subject-relative naming
+        // classifyGaze uses.
+        let pitchDeg = 0;
+        let yawDeg = 0;
+        if (fwdLen > 1e-9) {
+          pitchDeg = Math.asin(clamp1(fwd.y / fwdLen)) * RAD2DEG;
+          yawDeg = Math.asin(clamp1(fwd.x / fwdLen)) * RAD2DEG;
         }
 
         // === IRIS MATH ===
+        //
+        // Both axes measure the iris centre against the EYE CORNERS, normalised by
+        // eye width. The corners are skin-anchored and do not move when the eye
+        // opens, closes or blinks, which is what makes the signal stable.
+        //
+        // This replaces two bugs that made the old version report the opposite of
+        // what the user was doing:
+        //
+        // 1. Vertical was measured against the EYELID landmarks (159/386 upper,
+        //    145/374 lower) and normalised by the eyelid gap. The upper lid tracks
+        //    the gaze — look down and it droops onto the iris — so "distance from
+        //    iris to upper lid" SHRANK when looking down and the classifier read it
+        //    as looking up. That is the "I looked down, it said tilted up" report.
+        //    Normalising by the eyelid gap made it worse: the denominator collapses
+        //    toward zero on a blink and the ratio explodes.
+        //
+        // 2. Horizontal used distance-to-inner minus distance-to-outer per eye. The
+        //    inner corner is on opposite sides of the two eyes, so for one physical
+        //    look the two eyes produced equal and OPPOSITE values, and averaging
+        //    them cancelled to ~0. Horizontal gaze was effectively dead — which is
+        //    also why head pose was never vetoed sideways.
+        //
+        // Measuring a signed offset from the corner midpoint fixes both: the two
+        // eyes now agree in sign, and neither axis depends on the eyelid.
         const dist = (a: {x:number,y:number}, b: {x:number,y:number}) =>
           Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
 
-        // Left Eye Nodes
+        // Left Eye Nodes (image-left eye)
         const lIris = primary[468];
         const lInner = primary[133];
         const lOuter = primary[33];
         const lTop = primary[159];
         const lBottom = primary[145];
 
-        // Right Eye Nodes
+        // Right Eye Nodes (image-right eye)
         const rIris = primary[473];
         const rInner = primary[362];
         const rOuter = primary[263];
         const rTop = primary[386];
         const rBottom = primary[374];
 
-        // Horizontal Gaze (Positive = Right, Negative = Left)
-        const lGazeX = (dist(lIris, lInner) - dist(lIris, lOuter)) / dist(lInner, lOuter);
-        const rGazeX = (dist(rIris, rInner) - dist(rIris, rOuter)) / dist(rInner, rOuter);
-        const currentGazeX = (lGazeX + rGazeX) / 2;
+        const lWidth = dist(lInner, lOuter);
+        const rWidth = dist(rInner, rOuter);
 
-        // Vertical Gaze (Positive = Down, Negative = Up)
-        const lGazeY = (dist(lIris, lTop) - dist(lIris, lBottom)) / dist(lTop, lBottom);
-        const rGazeY = (dist(rIris, rTop) - dist(rIris, rBottom)) / dist(rTop, rBottom);
-        const currentGazeY = (lGazeY + rGazeY) / 2;
+        // Guard against a degenerate mesh (width 0 → Infinity poisons the baseline
+        // average for the whole session, since calibration takes a plain mean).
+        const EYE_MIN_WIDTH = 1e-6;
+        const lOk = lWidth > EYE_MIN_WIDTH;
+        const rOk = rWidth > EYE_MIN_WIDTH;
+
+        // === YAW-INVARIANT NORMALISER ===
+        //
+        // Dividing by the CURRENT eye width was the second half of the direction
+        // bug. Turn your head and the eyes foreshorten — the corner-to-corner
+        // distance can halve — so the same physical iris position divides by a
+        // much smaller number and the normalised offset doubles. A plain side
+        // turn therefore manufactured a large fake gaze deflection, which then
+        // beat head pose in fuseSensors and got reported on whichever axis
+        // happened to cross first.
+        //
+        // Face HEIGHT is the axis a horizontal turn does not compress, so
+        // baselineEyeW * (faceH / baselineFaceH) reconstructs "how wide the eye
+        // would be if the head were facing forward at this distance". Moving
+        // closer/further still scales correctly; turning no longer inflates.
+        // Before the baseline locks we have no reference, so we use the live
+        // width — during calibration the user is looking straight ahead anyway.
+        const faceH = Math.abs(chin.y - forehead.y);
+        const bEyeW = calibrationRef.current.baselineEyeW;
+        const bFaceH = calibrationRef.current.baselineFaceH;
+        const scale =
+          bEyeW !== null && bFaceH !== null && bFaceH > 1e-6 && faceH > 1e-6
+            ? bEyeW * (faceH / bFaceH)
+            : null;
+        const lNorm = scale ?? lWidth;
+        const rNorm = scale ?? rWidth;
+
+        // Signed offset from the corner midpoint, normalised by eye width.
+        // x: positive = iris toward image-right = the subject's OWN left.
+        // y: positive = iris below the corner line = looking DOWN.
+        const offX = (iris: {x:number}, inner: {x:number}, outer: {x:number}, w: number) =>
+          (iris.x - (inner.x + outer.x) / 2) / w;
+        const offY = (iris: {y:number}, inner: {y:number}, outer: {y:number}, w: number) =>
+          (iris.y - (inner.y + outer.y) / 2) / w;
+
+        const xs: number[] = [];
+        const ys: number[] = [];
+        if (lOk) { xs.push(offX(lIris, lInner, lOuter, lNorm)); ys.push(offY(lIris, lInner, lOuter, lNorm)); }
+        if (rOk) { xs.push(offX(rIris, rInner, rOuter, rNorm)); ys.push(offY(rIris, rInner, rOuter, rNorm)); }
+
+        const currentGazeX = xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
+        const currentGazeY = ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : 0;
+
+        // Eye aspect ratio — lid gap over eye width. Used ONLY to suppress the
+        // gaze read during a blink; it is deliberately not part of the gaze
+        // signal itself, which is the mistake the old vertical maths made.
+        const EAR_OPEN = 0.18;
+        const lEAR = lOk ? dist(lTop, lBottom) / lWidth : 0;
+        const rEAR = rOk ? dist(rTop, rBottom) / rWidth : 0;
+        const openCount = (lEAR > EAR_OPEN ? 1 : 0) + (rEAR > EAR_OPEN ? 1 : 0);
+        const eyesOpen = openCount > 0;
+
 
         // === CALIBRATION GAZE SAMPLES ===
         if (calibrationRef.current.isCalibrating) {
           if (faces === 1) {
-            calibrationRef.current.samples.push({ 
-              pitchRatio, 
-              noseX,
-              gazeX: currentGazeX,
-              gazeY: currentGazeY
-            });
+            // eyeW/faceH are the head-on reference geometry the yaw-invariant
+            // normaliser needs. Only meaningful while the user is facing forward,
+            // which is exactly the contract of this 5s window.
+            const eyeWObs = lOk && rOk ? (lWidth + rWidth) / 2 : lOk ? lWidth : rOk ? rWidth : 0;
+            if (eyeWObs > EYE_MIN_WIDTH && faceH > 1e-6) {
+              calibrationRef.current.samples.push({
+                pitchDeg,
+                yawDeg,
+                gazeX: currentGazeX,
+                gazeY: currentGazeY,
+                eyeW: eyeWObs,
+                faceH,
+              });
+            }
           }
-          
+
           // Lock baseline after 5 seconds
           if (Date.now() - calibrationRef.current.startTime > 5000) {
             const samples = calibrationRef.current.samples;
             if (samples.length >= 30) {
-              const meanPitch = samples.reduce((acc, s) => acc + s.pitchRatio, 0) / samples.length;
-              const meanYaw = samples.reduce((acc, s) => acc + s.noseX, 0) / samples.length;
+              const meanPitch = samples.reduce((acc, s) => acc + s.pitchDeg, 0) / samples.length;
+              const meanYaw = samples.reduce((acc, s) => acc + s.yawDeg, 0) / samples.length;
               const meanGazeX = samples.reduce((acc, s) => acc + s.gazeX, 0) / samples.length;
               const meanGazeY = samples.reduce((acc, s) => acc + s.gazeY, 0) / samples.length;
+              const meanEyeW = samples.reduce((acc, s) => acc + s.eyeW, 0) / samples.length;
+              const meanFaceH = samples.reduce((acc, s) => acc + s.faceH, 0) / samples.length;
 
               calibrationRef.current.baselinePitch = meanPitch;
               calibrationRef.current.baselineYaw = meanYaw;
               calibrationRef.current.baselineGazeX = meanGazeX;
               calibrationRef.current.baselineGazeY = meanGazeY;
-              
-              console.log(`[CALIBRATION] Baseline Locked -> Pitch: ${meanPitch.toFixed(2)}, Yaw: ${meanYaw.toFixed(2)}, GazeX: ${meanGazeX.toFixed(2)}, GazeY: ${meanGazeY.toFixed(2)}`);
+              calibrationRef.current.baselineEyeW = meanEyeW;
+              calibrationRef.current.baselineFaceH = meanFaceH;
+
+              console.log(`[CALIBRATION] Baseline Locked -> Pitch: ${meanPitch.toFixed(2)}, Yaw: ${meanYaw.toFixed(2)}, GazeX: ${meanGazeX.toFixed(2)}, GazeY: ${meanGazeY.toFixed(2)}, EyeW: ${meanEyeW.toFixed(4)}, FaceH: ${meanFaceH.toFixed(4)}`);
             } else {
               console.warn(`[CALIBRATION] Failed to lock baseline. Only ${samples.length} valid samples collected. Falling back to hardcoded heuristics.`);
             }
@@ -325,13 +600,33 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
         }
 
         // Determine Head Pose
-        const headPose = classifyPose(pitchRatio, noseX, calibrationRef.current.baselinePitch, calibrationRef.current.baselineYaw);
+        const headPose = classifyPose(pitchDeg, yawDeg, calibrationRef.current.baselinePitch, calibrationRef.current.baselineYaw);
         
         // Determine Gaze Pose
-        const gazePose = classifyGaze(currentGazeX, currentGazeY, calibrationRef.current.baselineGazeX, calibrationRef.current.baselineGazeY);
+        const gazePose = classifyGaze(
+          currentGazeX,
+          currentGazeY,
+          calibrationRef.current.baselineGazeX,
+          calibrationRef.current.baselineGazeY,
+          // Both halves of "usable": lids far enough apart to see the iris, and at
+          // least one eye with a non-degenerate width. With neither eye measurable
+          // currentGazeX/Y fall back to 0, which is not a centred gaze — it is the
+          // absence of one, and against a non-zero baseline it reads as a deflection.
+          eyesOpen && xs.length > 0,
+        );
 
-        // Fuse Sensors
-        pose = fuseSensors(headPose, gazePose);
+
+        // Fuse Sensors. The magnitude is what lets a strong deflection outrank a
+        // centred-iris veto; without it every look-away below HEAD_STRONG_DEG —
+        // and, since an absent third argument compares false against it, every
+        // look-away above it too — collapsed back to HEAD_CENTER.
+        const headMagDeg = poseMagnitudeDeg(
+          pitchDeg,
+          yawDeg,
+          calibrationRef.current.baselinePitch,
+          calibrationRef.current.baselineYaw,
+        );
+        pose = fuseSensors(headPose, gazePose, headMagDeg);
         gazeVector = [currentGazeX, currentGazeY];
 
         // --- 4. Draw Overlay ---
@@ -426,6 +721,8 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
         baselineYaw: null,
         baselineGazeX: null,
         baselineGazeY: null,
+        baselineEyeW: null,
+        baselineFaceH: null,
         startTime: Date.now()
       };
       setIsCalibrating(true);
@@ -473,6 +770,8 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
           baselineYaw: null,
           baselineGazeX: null,
           baselineGazeY: null,
+          baselineEyeW: null,
+          baselineFaceH: null,
           startTime: Date.now()
         };
         setIsCalibrating(true);
@@ -520,6 +819,8 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
     calibrationRef.current.baselineYaw = null;
     calibrationRef.current.baselineGazeX = null;
     calibrationRef.current.baselineGazeY = null;
+    calibrationRef.current.baselineEyeW = null;
+    calibrationRef.current.baselineFaceH = null;
     setIsCalibrating(false);
     setIsScanning(false);
     setSysStatus("IDLE");
@@ -639,7 +940,129 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
   }, [isScanning, isFaceMeshReady, runInferenceLoop]);
 
 
+  // ── Fast prop sweep (independent of the 5s telemetry chain) ─────────────
+  // The loop above is pinned to 5s because timeline.DASHBOARD_CADENCE_SEC
+  // treats "1 frame = 5 seconds" when converting frame counts into durations
+  // (speaking time, longest focus streak). Speeding it up would silently
+  // inflate every one of those numbers.
+  //
+  // But a 5s sample only catches a prop held up for longer than 5s — and the
+  // next tick is scheduled AFTER the fetch resolves, so the real gap is 5s
+  // plus round-trip. Anything raised and lowered in between was never sampled
+  // at all. This second chain hits a YOLO-only endpoint that writes no frames,
+  // so it can run fast without corrupting the dashboard's time math.
+  const propCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const propTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const propRunningRef = useRef(false);
+
+  const runPropScanLoop = useCallback(async () => {
+    const PROP_SCAN_MS = 1200;
+    // Must be > PROP_SCAN_MS. These were previously the same value, which meant
+    // any YOLO inference slower than one scan interval aborted its own request
+    // before the answer came back. On CPU, YOLOv8s at imgsz=640 routinely takes
+    // 1.5-3s, so every sweep aborted, the catch below swallowed it silently,
+    // and a phone was only caught by the 5s fallback loop — the exact "used to
+    // flag instantly, now takes several seconds" regression.
+    const PROP_TIMEOUT_MS = 5000;
+    // Floor between sweeps. Deadline scheduling (below) can drive the computed
+    // delay to zero when inference overruns the window; this keeps a slow backend
+    // from being hammered back-to-back with no breathing room.
+    const PROP_MIN_GAP_MS = 150;
+    if (!propRunningRef.current) return;
+
+    const tickStart = Date.now();
+
+    const video = videoRef.current;
+    // Deliberately NOT gated on calibration. The 5s baseline window exists for
+    // head-pose maths; YOLO does not consume it. Waiting for it meant a phone
+    // already on the desk at Engage went unseen for the first five seconds.
+    if (video && video.readyState >= 3) {
+      // Own canvas — sharing canvasRef would race with the telemetry loop and
+      // one could ship a half-drawn frame.
+      if (!propCanvasRef.current) propCanvasRef.current = document.createElement("canvas");
+      const canvas = propCanvasRef.current;
+      const ctx = canvas.getContext("2d");
+
+      if (ctx) {
+        canvas.width = 640;
+        canvas.height = 360;
+        ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, 0, 0, 640, 360);
+        // 0.6 quality vs the main loop's 0.8: YOLO only needs the shape, and
+        // this keeps 4x the cadence from costing 4x the bandwidth.
+        const b64 = canvas.toDataURL("image/jpeg", 0.6).split(",")[1];
+
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), PROP_TIMEOUT_MS);
+          const res = await fetch("http://localhost:8080/api/v1/scan-objects", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: controller.signal,
+            body: JSON.stringify({
+              candidate_id: CANDIDATE_ID,
+              session_id: sessionIdRef.current,
+              image_base64: b64,
+            }),
+          });
+          clearTimeout(timeoutId);
+          const data = await res.json();
+
+          // Only paint on a real escalation. The backend returns the rising
+          // edge only, so a prop sitting in frame reports escalated=false on
+          // every subsequent sweep — repainting from those would stomp the
+          // verdict the 5s loop owns.
+          if (data.escalated && data.risk_packet) {
+            setRiskScore(data.risk_packet.risk_score);
+            setViolationCount(data.risk_packet.violation_count);
+            setInterventionLevel(data.risk_packet.intervention_level);
+            setLatestVerdict(data.verdict);
+            onTelemetryUpdateRef.current(data.risk_packet, data.verdict);
+          }
+        } catch {
+          // Stay silent — the telemetry loop already surfaces backend-down.
+          // Two error banners fighting over the same panel helps nobody.
+        }
+      }
+    }
+
+    if (propRunningRef.current) {
+      // Cadence is measured from the START of this sweep, not from its end.
+      //
+      // This is the "takes ~3s to see a phone" bug. The delay used to be appended
+      // AFTER the fetch resolved, so the real period was PROP_SCAN_MS *plus* the
+      // full round trip. YOLOv8s on CPU runs 1.5-3s per frame, which put the true
+      // sweep interval at 3-4s and worst-case detection latency at nearly double
+      // the 1.2s the status chip advertises.
+      //
+      // Timing from tickStart makes the interval a deadline rather than a gap:
+      // when inference fits inside the window the cadence is a genuine 1.2s, and
+      // when it overruns the next sweep starts as soon as PROP_MIN_GAP_MS allows
+      // instead of idling for another 1.2s on top.
+      const elapsed = Date.now() - tickStart;
+      propTimerRef.current = setTimeout(
+        runPropScanLoop,
+        Math.max(PROP_MIN_GAP_MS, PROP_SCAN_MS - elapsed),
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isScanning && isFaceMeshReady && !propRunningRef.current) {
+      propRunningRef.current = true;
+      runPropScanLoop();
+    }
+    return () => {
+      propRunningRef.current = false;
+      if (propTimerRef.current) {
+        clearTimeout(propTimerRef.current);
+        propTimerRef.current = null;
+      }
+    };
+  }, [isScanning, isFaceMeshReady, runPropScanLoop]);
+
+
   // ── Severity-colour helpers (single source of truth for the panel) ──────
+
   const tierToken =
     interventionLevel === "SEVERE_VIOLATION_LOGGED" ? "danger" :
     interventionLevel === "HARD_WARNING"            ? "amber"  :
@@ -776,8 +1199,9 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
 
           {sysStatus === "ACTIVE" && (
             <span className="px-2.5 py-1 rounded-md text-[11px] font-medium uppercase backdrop-blur-md border bg-[var(--color-surface)]/70 border-[var(--color-hairline)] text-[var(--color-slate)]">
-              5s sample
+              5s composure · 1.2s objects
             </span>
+
           )}
         </div>
 
@@ -874,11 +1298,16 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, ref }: Sni
             />
             Behavioral Log
           </span>
+          {/* Colour comes from the tier, NOT from sniffing the verdict text.
+              Sniffing for "CRITICAL" meant the log painted danger-red while the
+              Tier badge beside it still read HARD_WARNING — two independent
+              sources for one piece of state, guaranteed to disagree. */}
           <p
             className={`font-mono text-[13px] leading-snug ${
-
-              latestVerdict.includes("CRITICAL") || latestVerdict.includes("FATAL")
+              tierToken === "danger"
                 ? "text-[var(--color-danger)]"
+                : tierToken === "amber"
+                ? "text-[var(--color-amber)]"
                 : "text-[var(--color-parchment)]"
             }`}
           >
