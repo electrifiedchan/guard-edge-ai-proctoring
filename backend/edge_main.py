@@ -273,12 +273,30 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
     )
 
     # --- PHASE 4: BEA temporal graph ---
-    if is_critical:
+    # Objects are owned by the fast prop sweep, which sees strictly more than
+    # this loop does (1.2s vs 5s) and flags on the rising edge. If it has
+    # already latched this prop, re-confirming here would bill one phone twice
+    # per incident and march risk toward a lockout the user never earned.
+    # The frame is still recorded — it just doesn't open a second violation.
+    #
+    # Guarded on the latch, not on critical_kind alone, so this loop remains a
+    # full fallback: if the sweep is unreachable the latch stays False and the
+    # escalation below still fires exactly as it did before.
+    if is_critical and critical_kind == "object" and _prop_seen.get(bea_key, False):
+        # Prop already flagged by the fast sweep — skip escalation so we don't
+        # bill it twice, but still write the frame so the verdict page has the
+        # visual. Record as neutral telemetry, not as a new violation.
+        risk_packet = await bea_engine.get_status(bea_key)
+    elif is_critical:
         # A visible object is proof on sight; ambiguous signals keep the debounce.
         instant = critical_kind == "object"
+        if instant:
+            # Latch it so the sweep doesn't immediately re-flag the same prop.
+            _prop_seen[bea_key] = True
         decision = await bea_engine.record_critical_signal(
             bea_key, True, verdict, instant=instant
         )
+
         if decision["confirmed"]:
             consolidated = "; ".join(decision["pending_reasons"]) or verdict
             # record_violation, not trigger_fatal_lockout: the flag must be logged
@@ -350,8 +368,131 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
 
 
 # ---------------------------------------------------------------------------
+# /api/v1/scan-objects — fast prop sweep, decoupled from the 5s telemetry loop
+# ---------------------------------------------------------------------------
+class ObjectScanPayload(BaseModel):
+    candidate_id: str
+    image_base64: str
+    session_id: str | None = None
+
+
+# Person (0) is deliberately excluded: head-count comes from MediaPipe in the
+# main loop, and this sweep only answers "is a prop visible". Derived from
+# YOLO_WATCH_CLASSES so the BEA_WATCH_LAPTOP opt-in is picked up for free.
+YOLO_PROP_CLASSES = [c for c in YOLO_WATCH_CLASSES if c != 0]
+
+# Rising-edge memory per candidate. A phone left on the desk for 20s is ONE
+# incident, not 16 — without this the fast cadence would multiply a single
+# event by the scan rate and drive risk to 100% in seconds.
+_prop_seen: dict[str, bool] = {}
+
+
+@app.post("/api/v1/scan-objects")
+async def scan_objects(payload: ObjectScanPayload, background_tasks: BackgroundTasks):
+    """YOLO-only sweep that runs several times faster than the telemetry loop.
+
+    Why this is a separate endpoint instead of just lowering the analyze-frame
+    interval: `timeline.DASHBOARD_CADENCE_SEC` hardcodes "1 frame = 5 seconds of
+    session time", so every duration on the dashboard (speaking time, longest
+    focus streak) is derived from the frame COUNT. Sampling analyze-frame faster
+    would silently inflate all of them by the same ratio.
+
+    So this path writes NO timeline_frames. It answers one question — is a prop
+    visible right now — and escalates on the rising edge if so.
+    """
+    session_id = payload.session_id or payload.candidate_id
+    bea_key = payload.candidate_id
+
+    raw_b64 = payload.image_base64
+    if "," in raw_b64:
+        raw_b64 = raw_b64.split(",", 1)[1]
+    try:
+        img_bytes = base64.b64decode(raw_b64)
+        img_array = np.frombuffer(img_bytes, dtype=np.uint8)
+        image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+    except Exception as e:
+        logger.error(f"❌ Prop scan decode error: {e}")
+        raise HTTPException(status_code=400, detail="Invalid image payload.")
+
+    loop = asyncio.get_running_loop()
+    results = await loop.run_in_executor(
+        app.state.executor,
+        lambda: yolo_model(
+            image, verbose=False, classes=YOLO_PROP_CLASSES,
+            imgsz=640, augment=False, conf=YOLO_CONF,
+        ),
+    )
+
+    detected_objects = []
+    for r in results:
+        for box in r.boxes:
+            label = yolo_model.names[int(box.cls[0])]
+            detected_objects.append(f"{label} ({float(box.conf[0]):.0%})")
+
+    if any("cell phone" in o.lower() for o in detected_objects):
+        verdict = "CRITICAL: Mobile device detected in frame."
+    elif any("book" in o.lower() or "laptop" in o.lower() for o in detected_objects):
+        verdict = "CRITICAL: Prohibited item detected on desk."
+    else:
+        verdict = None
+
+    was_seen = _prop_seen.get(bea_key, False)
+    _prop_seen[bea_key] = verdict is not None
+
+    # Nothing there, or the same prop we already flagged — stop here.
+    #
+    # Deliberately NOT calling record_critical_signal(False) on the clear path:
+    # that resets the 3-of-5 buffer the main loop builds for transient signals
+    # (face lost / extra face). This loop runs ~4x more often, so clearing from
+    # here would wipe the debounce before it could ever fill, and those flags
+    # would stop firing entirely. The 5s loop owns that buffer; this one only
+    # ever adds an instant object critical.
+    if verdict is None or was_seen:
+        return {
+            "detected": verdict is not None,
+            "escalated": False,
+            "objects": detected_objects,
+        }
+
+    logger.info(f"🔫 PROP SWEEP: {detected_objects} → escalating")
+
+    decision = await bea_engine.record_critical_signal(
+        bea_key, True, verdict, instant=True
+    )
+    if not decision["confirmed"]:
+        return {"detected": True, "escalated": False, "objects": detected_objects}
+
+    consolidated = "; ".join(decision["pending_reasons"]) or verdict
+    risk_packet = await bea_engine.record_violation(bea_key, reason=consolidated)
+    verdict_text = f"CONFIRMED: {consolidated}"
+
+    # Same evidence trail as the main loop, so the prop still shows up on the
+    # verdict page with the frame that caught it.
+    if risk_packet.get("autopsy_flag", False):
+        evidence_url = write_evidence_frame(session_id, payload.image_base64)
+        background_tasks.add_task(
+            insert_moment,
+            uuid.uuid4().hex,
+            session_id,
+            time.time(),
+            risk_packet.get("intervention_level", "WARNING"),
+            verdict_text[:200],
+            evidence_url,
+        )
+
+    return {
+        "detected": True,
+        "escalated": True,
+        "objects": detected_objects,
+        "verdict": verdict_text,
+        "risk_packet": risk_packet,
+    }
+
+
+# ---------------------------------------------------------------------------
 # GET /api/v1/session/{session_id}/timeline  — MR 1 read endpoint
 # ---------------------------------------------------------------------------
+
 @app.get("/api/v1/session/{session_id}/timeline")
 async def get_session_timeline(session_id: str):
     """Return all timeline_frames and moments for a session."""
@@ -728,7 +869,12 @@ async def get_candidate_status(candidate_id: str):
 @app.post("/reset-session")
 async def reset_session(candidate_id: str = "major_project_candidate_01"):
     await bea_engine.reset_candidate(candidate_id)
+    # Re-arm the prop sweep. Without this a phone still sitting in frame when
+    # the user hits "Clear memory" stays latched as already-seen, so it would
+    # never re-flag for the rest of the run.
+    _prop_seen.pop(candidate_id, None)
     return {"status": "success", "message": "Memory cleared."}
+
 
 
 # ---------------------------------------------------------------------------
@@ -917,6 +1063,10 @@ Return ONLY the coaching text. No JSON, no markdown headers, no pleasantries."""
 class StartSessionRequest(BaseModel):
     resume_text: str
     questions: list[dict]
+    # The interviewer style the user picked before engaging. Optional so older
+    # clients (and the tests) keep working — omitting it gives the original
+    # full warmup-to-pressure ramp.
+    starting_persona: str = "friendly_hr"
 
 
 class ConversationTurnRequest(BaseModel):
@@ -934,6 +1084,7 @@ async def start_interview_session(payload: StartSessionRequest):
     """Create a conversational interview session and return the AI's opening greeting."""
     try:
         result = await conversation_engine.create_session(
+            starting_persona=payload.starting_persona,
             resume_text=payload.resume_text,
             questions=payload.questions,
         )

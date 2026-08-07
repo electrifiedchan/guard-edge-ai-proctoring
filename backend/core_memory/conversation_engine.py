@@ -35,6 +35,10 @@ class InterviewSession:
     conversation_history: list[ConversationTurn] = field(default_factory=list)
     current_turn: int = 0
     current_persona: Persona = Persona.FRIENDLY_HR
+    # The rung the user picked before engaging. The ladder below still climbs,
+    # it just starts here — picking Curious Peer skips the rapport warmup
+    # rather than pinning the whole interview to one persona.
+    starting_persona: Persona = Persona.FRIENDLY_HR
     scaffolding_level: int = 0
     focus_scores: list[float] = field(default_factory=list)
     is_complete: bool = False
@@ -47,25 +51,92 @@ class InterviewSession:
 SESSION_TTL_SEC = 60 * 60
 
 
+# Difficulty ladder, easiest first. _determine_persona walks this by turn count
+# and the user's chosen starting rung is added as an offset.
+PERSONA_LADDER = [
+    Persona.FRIENDLY_HR,
+    Persona.CURIOUS_PEER,
+    Persona.SKEPTICAL_TECH_LEAD,
+]
+
+
 PERSONA_SYSTEM_PROMPTS = {
     Persona.FRIENDLY_HR: """You are a warm, approachable senior hiring manager conducting the opening of a mock interview.
 Your role: build rapport, make the candidate comfortable, and ease them into the conversation.
 Tone: Friendly, validating, encouraging. Use phrases like "That's great", "I'd love to hear more about..."
 Ask broad, easy warmup questions — "Tell me a bit about yourself", "What drew you to this field?"
-Keep responses to 2-3 sentences max. Be conversational, not interrogative.""",
+Be conversational, not interrogative.""",
 
     Persona.CURIOUS_PEER: """You are a curious senior engineer conducting a technical peer interview.
 Your role: explore the candidate's technical foundations with genuine curiosity.
 Tone: Collegial, intellectually curious. Use phrases like "Interesting — how did you approach...", "What made you choose X over Y?"
 Ask foundational technical questions based on their resume. Dig one level deeper than surface answers.
-Keep responses to 2-3 sentences max. Be conversational and natural.""",
+Be conversational and natural.""",
 
     Persona.SKEPTICAL_TECH_LEAD: """You are a seasoned tech lead stress-testing the candidate's technical depth.
 Your role: apply professional pushback, rapid follow-ups, and probe for edge cases.
 Tone: Respectful but challenging. Use phrases like "I'm not sure that scales — what happens when...", "Walk me through the failure mode", "What's the tradeoff there?"
 Challenge their assumptions. Ask about what could go wrong. Probe system design decisions.
-Keep responses to 2-3 sentences max. Stay professional — tough but never hostile.""",
+Stay professional — tough but never hostile.""",
 }
+
+
+# Every reply is spoken aloud before the candidate can respond, so length is a
+# UX cost rather than just a token cost — roughly 35 words is 12 seconds of
+# waiting. Each persona prompt already said "2-3 sentences max" and the model
+# routinely blew through it, because it spends the budget validating the answer
+# before it gets around to asking anything. Naming the specific padding habits
+# holds far better than restating a sentence count.
+BREVITY_RULE = """
+
+HARD LENGTH LIMIT — your reply is spoken aloud, so every extra word is dead air:
+- Maximum 2 sentences, 35 words total. Shorter is better.
+- No preamble. Never open with "That's a great question", "Absolutely",
+  "I love that", or any compliment on the answer.
+- Do not summarise or repeat back what the candidate just said.
+- Ask exactly one question, and end your reply on it."""
+
+
+def _trim_to_sentences(text: str, max_words: int = 45) -> str:
+    """Clamp a spoken reply to whole sentences within a word budget.
+
+    max_tokens is the only hard cap the API gives us, and it cuts mid-word —
+    which the browser's speech synthesiser reads out as a dangling fragment.
+    The prompt above does the real work and usually keeps replies short; this is
+    the backstop for when it doesn't, and it always lands on a sentence end.
+    """
+    text = text.strip()
+    if not text or len(text.split()) <= max_words:
+        return text
+
+    sentences = [s.strip() for s in re.findall(r"[^.!?]+[.!?]+|[^.!?]+$", text) if s.strip()]
+    kept: list[str] = []
+    total = 0
+    for sentence in sentences:
+        words = len(sentence.split())
+        # The first sentence is kept unconditionally: a reply trimmed to nothing
+        # is worse than one slightly over budget.
+        if kept and total + words > max_words:
+            break
+        kept.append(sentence)
+        total += words
+
+    result = " ".join(kept).strip()
+
+    # Trimming runs front-to-back, and an overlong reply is usually padding
+    # followed by the actual question — so the budget can spend itself on the
+    # preamble and drop the question entirely. That stalls the interview: the
+    # candidate is handed a comment with nothing to answer. When that happens,
+    # pair the opening sentence with the question instead of honouring the
+    # budget. A slightly long reply beats a dead turn.
+    if "?" not in result:
+        asked = [s for s in sentences if s.endswith("?")]
+        if asked:
+            opening = kept[0] if kept else ""
+            question = asked[-1]
+            result = question if opening == question else f"{opening} {question}".strip()
+
+    return result
 
 SCAFFOLDING_INSTRUCTIONS = {
     0: "",
@@ -125,13 +196,31 @@ class ConversationEngine:
         if stale:
             logger.info(f"Pruned {len(stale)} expired interview session(s)")
 
-    async def create_session(self, resume_text: str, questions: list[dict]) -> dict:
+    async def create_session(
+        self,
+        resume_text: str,
+        questions: list[dict],
+        starting_persona: str = Persona.FRIENDLY_HR.value,
+    ) -> dict:
         self._prune_sessions()
         session_id = uuid.uuid4().hex[:12]
+
+        # An unknown value from the client shouldn't 500 the session — fall back
+        # to the gentlest rung, which is also the historical default.
+        try:
+            start = Persona(starting_persona)
+        except ValueError:
+            logger.warning(
+                f"Unknown starting persona {starting_persona!r}; using friendly_hr"
+            )
+            start = Persona.FRIENDLY_HR
+
         session = InterviewSession(
             session_id=session_id,
             resume_text=resume_text,
             resume_questions=questions,
+            current_persona=start,
+            starting_persona=start,
         )
         self.sessions[session_id] = session
 
@@ -139,14 +228,14 @@ class ConversationEngine:
         session.conversation_history.append(ConversationTurn(
             role="interviewer",
             content=opening,
-            persona=Persona.FRIENDLY_HR.value,
+            persona=start.value,
             turn_number=0,
         ))
 
         return {
             "session_id": session_id,
             "opening_message": opening,
-            "persona": Persona.FRIENDLY_HR.value,
+            "persona": start.value,
         }
 
     async def process_candidate_turn(
@@ -274,13 +363,24 @@ Write in 2nd person ("You did well when..."). Be warm but honest. No bullet poin
         }
 
     def _determine_persona(self, session: InterviewSession) -> Persona:
+        """Walk the difficulty ladder by turn count, starting at the user's pick.
+
+        The turn thresholds are unchanged (rung up after turn 2, again after
+        turn 5); the chosen starting persona just shifts where that walk begins.
+        So Friendly HR behaves exactly as before, while Curious Peer skips the
+        rapport warmup and reaches Skeptical Tech Lead sooner. Picking the
+        hardest rung pins there, because there is nothing above it to climb to.
+        """
         turn = session.current_turn
         if turn <= 2:
-            return Persona.FRIENDLY_HR
+            base = 0
         elif turn <= 5:
-            return Persona.CURIOUS_PEER
+            base = 1
         else:
-            return Persona.SKEPTICAL_TECH_LEAD
+            base = 2
+
+        offset = PERSONA_LADDER.index(session.starting_persona)
+        return PERSONA_LADDER[min(base + offset, len(PERSONA_LADDER) - 1)]
 
     def _assess_answer_quality(self, transcript: str) -> str:
         words = transcript.split()
@@ -316,17 +416,43 @@ Write in 2nd person ("You did well when..."). Be warm but honest. No bullet poin
 
     async def _generate_opening(self, session: InterviewSession) -> str:
         topics = [q.get("focus", "general") for q in session.resume_questions[:2]]
-        prompt = f"""You are a warm, friendly senior hiring manager starting a mock interview.
-The candidate's background includes: {session.resume_text[:500]}
+
+        # The opening used to be hardcoded warm-and-gentle. Now that the user
+        # picks a starting rung, an opening that ignores it would misrepresent
+        # the session they asked for — pick Skeptical Tech Lead and the first
+        # question should already have teeth.
+        opening_briefs = {
+            Persona.FRIENDLY_HR: (
+                "Welcome them warmly and ask one gentle opening question to get "
+                "them talking. Do NOT ask a hard technical question. Keep it easy "
+                "and rapport-building."
+            ),
+            Persona.CURIOUS_PEER: (
+                "Skip the small talk. Greet them briefly, then open with one "
+                "foundational technical question drawn from their resume."
+            ),
+            Persona.SKEPTICAL_TECH_LEAD: (
+                "Skip the pleasantries. Greet them in a few words, then open with "
+                "one probing technical question about scale, tradeoffs, or failure "
+                "modes in the work on their resume."
+            ),
+        }
+        brief = opening_briefs[session.starting_persona]
+        system_prompt = PERSONA_SYSTEM_PROMPTS[session.starting_persona]
+
+        prompt = f"""{system_prompt}
+
+You are starting the interview. The candidate's background includes: {session.resume_text[:500]}
 Their resume highlights topics like: {', '.join(topics)}.
 
-Generate a brief, natural opening greeting (2-3 sentences). Welcome them warmly, mention something specific from their background that caught your eye, and ask a gentle opening question to get them talking.
-Do NOT ask a hard technical question. Keep it easy and rapport-building."""
+Generate a brief, natural opening (1-2 sentences). {brief}{BREVITY_RULE}"""
 
-        return await self._call_llm(prompt)
+        text = await self._call_llm(prompt)
+        return _trim_to_sentences(text)
 
     async def _generate_response(self, session: InterviewSession, is_transition: bool) -> str:
         system_prompt = PERSONA_SYSTEM_PROMPTS[session.current_persona]
+        system_prompt += BREVITY_RULE
         system_prompt += SCAFFOLDING_INSTRUCTIONS[session.scaffolding_level]
 
         if is_transition:
@@ -356,17 +482,18 @@ Interview topics to weave in naturally (don't read verbatim — adapt to convers
                 max_tokens=200,
                 timeout=TURN_TIMEOUT_SEC,
             )
-            return completion.choices[0].message.content.strip()
+            text = completion.choices[0].message.content.strip()
+            return _trim_to_sentences(text)
         except Exception as e:
             logger.error(f"Conversation response failed: {e}", exc_info=True)
 
-            return "That's interesting. Could you tell me a bit more about your approach there?"
+            return "Could you tell me more about your approach there?"
 
     async def _generate_wrap_up(self, session: InterviewSession) -> str:
-        prompt = """You are wrapping up a mock interview as a senior hiring manager.
-Generate a brief, warm closing (2 sentences). Thank the candidate for their time, mention that you'll now provide detailed feedback, and wish them well.
-Keep it natural and encouraging."""
-        return await self._call_llm(prompt)
+        prompt = f"""You are wrapping up a mock interview as a senior hiring manager.
+Generate a brief, warm closing (1-2 sentences). Thank the candidate for their time, mention that you'll now provide detailed feedback, and wish them well. Keep it natural and encouraging.{BREVITY_RULE}"""
+        text = await self._call_llm(prompt)
+        return _trim_to_sentences(text, max_words=35)
 
     async def _call_llm(self, prompt: str) -> str:
         try:
