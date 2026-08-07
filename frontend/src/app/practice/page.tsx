@@ -44,11 +44,53 @@ const LOADING_MESSAGES = [
   "Generating behavioral questions…",
 ];
 
+// Colors are theme tokens, not raw Tailwind shades. The old values
+// (emerald-400 / sky-400 / amber-400) were tuned for the dark canvas and
+// dropped to ~2:1 contrast on the light theme's white surface.
 const PERSONA_LABELS: Record<string, { label: string; color: string }> = {
-  friendly_hr: { label: "Friendly HR", color: "text-emerald-400" },
-  curious_peer: { label: "Curious Peer", color: "text-sky-400" },
-  skeptical_tech_lead: { label: "Tech Lead", color: "text-amber-400" },
+  friendly_hr: { label: "Friendly HR", color: "text-[var(--color-signal)]" },
+  curious_peer: { label: "Curious Peer", color: "text-[var(--color-info)]" },
+  skeptical_tech_lead: { label: "Tech Lead", color: "text-[var(--color-warn)]" },
 };
+
+// The rung the interview opens on. The engine still escalates from here, so
+// this sets where the ramp begins rather than pinning the whole session.
+const PERSONA_OPTIONS = [
+  {
+    id: "friendly_hr",
+    label: "Friendly HR",
+    tagline: "Warm open",
+    blurb: "Rapport first. Eases in with broad questions before any technical depth.",
+    accent: "var(--color-signal)",
+    Icon: User,
+  },
+  {
+    id: "curious_peer",
+    label: "Curious Peer",
+    tagline: "Straight in",
+    blurb: "Skips small talk. Opens on your resume's fundamentals and digs a level deeper.",
+    accent: "var(--color-info)",
+    Icon: Brain,
+  },
+  {
+    id: "skeptical_tech_lead",
+    label: "Tech Lead",
+    tagline: "Full pressure",
+    blurb: "Probing from turn one — scale, tradeoffs, and failure modes.",
+    accent: "var(--color-warn)",
+    Icon: Target,
+  },
+] as const;
+
+type PersonaId = (typeof PERSONA_OPTIONS)[number]["id"];
+
+/** Composure score → theme token. The thresholds (80 / 50) match the backend's
+ *  Excellent / Moderate / Needs-Improvement bands in generate_final_verdict. */
+function scoreTone(score: number): string {
+  if (score >= 80) return "text-[var(--color-signal)]";
+  if (score >= 50) return "text-[var(--color-warn)]";
+  return "text-[var(--color-danger)]";
+}
 
 export default function PracticeGym() {
   const router = useRouter();
@@ -65,6 +107,7 @@ export default function PracticeGym() {
   const sessionIdRef = useRef("");
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [currentPersona, setCurrentPersona] = useState("friendly_hr");
+  const [startingPersona, setStartingPersona] = useState<PersonaId>("friendly_hr");
   const [turnState, setTurnState] = useState<TurnState>("idle");
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -195,6 +238,7 @@ export default function PracticeGym() {
     sessionIdRef.current = "";
     setChatHistory([]);
     setCurrentPersona("friendly_hr");
+    setStartingPersona("friendly_hr");
     setTurnState("idle");
     setFocusScore(100);
     setVerdictReport("");
@@ -215,7 +259,11 @@ export default function PracticeGym() {
       const res = await fetch(`${API_BASE}/api/v1/interview/start-session`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resume_text: resumeText, questions }),
+        body: JSON.stringify({
+          resume_text: resumeText,
+          questions,
+          starting_persona: startingPersona,
+        }),
       });
 
       if (!res.ok) throw new Error("Failed to start session");
@@ -236,7 +284,7 @@ export default function PracticeGym() {
       setError("Failed to start interview session. Check backend.");
       setPhase("interview");
     }
-  }, [resumeText, questions, speakText, startListening]);
+  }, [resumeText, questions, startingPersona, speakText, startListening]);
 
   // -- Called by VAD when silence detected after speech --
   async function handleSpeechEnd(blob: Blob) {
@@ -531,6 +579,88 @@ export default function PracticeGym() {
                 ))}
               </div>
 
+              {/* Interviewer style — sets the rung the session opens on */}
+              <div className="flex flex-col gap-3 mt-2">
+                <div className="flex items-baseline justify-between">
+                  <h3 className="text-sm font-semibold text-[var(--color-snow)]">
+                    Choose your interviewer
+                  </h3>
+                  <span className="text-[11px] text-[var(--color-slate)]">
+                    Difficulty still ramps up as you go
+                  </span>
+                </div>
+
+                <div
+                  role="radiogroup"
+                  aria-label="Interviewer style"
+                  className="grid gap-3 sm:grid-cols-3"
+                >
+                  {PERSONA_OPTIONS.map(({ id, label, tagline, blurb, accent, Icon }) => {
+                    const selected = startingPersona === id;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => setStartingPersona(id)}
+                        style={
+                          {
+                            borderColor: selected ? accent : undefined,
+                            // color-mix keeps the tint derived from the same token
+                            // the theme already swapped, so the wash works on the
+                            // dark canvas and the light surface without a second palette.
+                            backgroundColor: selected
+                              ? `color-mix(in srgb, ${accent} 10%, transparent)`
+                              : undefined,
+                          } as React.CSSProperties
+                        }
+                        className={`group relative text-left rounded-lg p-4 border transition-all cursor-pointer
+                          focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-signal)]
+                          ${
+                            selected
+                              ? "shadow-sm"
+                              : "border-[var(--color-hairline)] bg-[var(--color-surface)] hover:border-[var(--color-hairline-strong)]"
+                          }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Icon
+                            size={15}
+                            style={{ color: selected ? accent : undefined }}
+                            className={selected ? "" : "text-[var(--color-slate)]"}
+                          />
+                          <span
+                            className="text-sm font-semibold text-[var(--color-snow)]"
+                          >
+                            {label}
+                          </span>
+                          {selected && (
+                            <motion.span
+                              layoutId="persona-check"
+                              className="ml-auto w-1.5 h-1.5 rounded-full"
+                              style={{ backgroundColor: accent }}
+                            />
+                          )}
+                        </div>
+
+                        <span
+                          className="mt-2 inline-block text-[10px] font-medium uppercase tracking-wider"
+                          style={{ color: selected ? accent : undefined }}
+                        >
+                          <span className={selected ? "" : "text-[var(--color-fog)]"}>
+                            {tagline}
+                          </span>
+                        </span>
+
+                        <p className="mt-1.5 text-xs leading-relaxed text-[var(--color-slate)]">
+                          {blurb}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               {/* CTA */}
               <div className="flex items-center gap-3 mt-2">
                 <button
@@ -585,9 +715,7 @@ export default function PracticeGym() {
                 </div>
                 <div className="flex items-center gap-1.5">
                   <Eye size={12} className="text-[var(--color-slate)]" />
-                  <span className={`text-xs font-mono font-bold tabular-nums ${
-                    focusScore >= 80 ? "text-emerald-400" : focusScore >= 50 ? "text-amber-400" : "text-rose-500"
-                  }`}>
+                  <span className={`text-xs font-mono font-bold tabular-nums ${scoreTone(focusScore)}`}>
                     {focusScore}
                   </span>
                 </div>
@@ -603,18 +731,33 @@ export default function PracticeGym() {
                     transition={{ delay: 0.05 }}
                     className={`flex gap-3 ${msg.role === "candidate" ? "flex-row-reverse" : ""}`}
                   >
+                    {/* Both bubbles resolve through theme tokens. The candidate
+                        side used sky-500/10 + sky-100 text, which inverted to
+                        near-white ink on a pale wash in the light theme. */}
                     <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${
                       msg.role === "interviewer"
                         ? "bg-[var(--color-signal-soft)] text-[var(--color-signal)]"
-                        : "bg-sky-500/10 text-sky-400"
+                        : "bg-[var(--color-surface-2)] text-[var(--color-info)]"
                     }`}>
                       {msg.role === "interviewer" ? <Bot size={13} /> : <User size={13} />}
                     </div>
-                    <div className={`max-w-[75%] rounded-lg px-4 py-2.5 text-sm leading-relaxed ${
-                      msg.role === "interviewer"
-                        ? "bg-neutral-900 text-[var(--color-snow)] border border-[var(--color-hairline)]"
-                        : "bg-sky-500/10 text-sky-100 border border-sky-500/20"
-                    }`}>
+                    <div
+                      style={
+                        msg.role === "candidate"
+                          ? {
+                              backgroundColor:
+                                "color-mix(in srgb, var(--color-info) 10%, transparent)",
+                              borderColor:
+                                "color-mix(in srgb, var(--color-info) 30%, transparent)",
+                            }
+                          : undefined
+                      }
+                      className={`max-w-[75%] rounded-lg px-4 py-2.5 text-sm leading-relaxed border text-[var(--color-snow)] ${
+                        msg.role === "interviewer"
+                          ? "bg-[var(--color-surface-2)] border-[var(--color-hairline)]"
+                          : ""
+                      }`}
+                    >
                       {msg.content}
                     </div>
                   </motion.div>
@@ -707,24 +850,24 @@ export default function PracticeGym() {
               className="flex-1 flex flex-col gap-6"
             >
               {/* Report Card */}
-              <div className="relative lift-2 rounded-xl p-8 border border-emerald-500/20 bg-gradient-to-br from-[var(--color-surface)] to-neutral-950 overflow-hidden">
+              {/* Gradient lands on --color-surface-2 rather than neutral-950 so
+                  the card doesn't stay near-black under the light theme. */}
+              <div className="relative lift-2 rounded-xl p-8 border border-[var(--color-hairline)] bg-gradient-to-br from-[var(--color-surface)] to-[var(--color-surface-2)] overflow-hidden">
                 {/* Glow effect */}
-                <div className="absolute -top-24 -right-24 w-48 h-48 rounded-full bg-emerald-500/10 blur-3xl pointer-events-none" />
+                <div className="absolute -top-24 -right-24 w-48 h-48 rounded-full bg-[var(--color-signal-soft)] blur-3xl pointer-events-none" />
 
                 {/* Header */}
                 <div className="flex items-start justify-between mb-6 relative">
                   <div className="flex flex-col gap-1">
-                    <span className="eyebrow text-emerald-400">AI Coaching Verdict</span>
+                    <span className="eyebrow text-[var(--color-signal)]">AI Coaching Verdict</span>
                     <h2 className="text-xl font-bold text-[var(--color-snow)] tracking-tight">
                       Executive Interview Report
                     </h2>
                   </div>
 
                   {/* Focus Score Badge */}
-                  <div className="flex flex-col items-center gap-1 px-4 py-3 rounded-lg bg-neutral-900/80 border border-[var(--color-hairline)]">
-                    <span className={`text-3xl font-bold tabular-nums font-mono ${
-                      avgFocusScore >= 80 ? "text-emerald-400" : avgFocusScore >= 50 ? "text-amber-400" : "text-rose-500"
-                    }`}>
+                  <div className="flex flex-col items-center gap-1 px-4 py-3 rounded-lg bg-[var(--color-surface)] border border-[var(--color-hairline)]">
+                    <span className={`text-3xl font-bold tabular-nums font-mono ${scoreTone(avgFocusScore)}`}>
                       {avgFocusScore}
                     </span>
                     <span className="text-[9px] uppercase tracking-widest text-[var(--color-slate)]">
@@ -756,9 +899,9 @@ export default function PracticeGym() {
                   </div>
                   <div className="flex flex-col gap-1">
                     <span className="text-[10px] uppercase tracking-wider text-[var(--color-slate)]">Avg Focus</span>
-                    <span className={`text-lg font-semibold tabular-nums ${
-                      avgFocusScore >= 80 ? "text-emerald-400" : avgFocusScore >= 50 ? "text-amber-400" : "text-rose-500"
-                    }`}>{avgFocusScore}%</span>
+                    <span className={`text-lg font-semibold tabular-nums ${scoreTone(avgFocusScore)}`}>
+                      {avgFocusScore}%
+                    </span>
                   </div>
                   <div className="flex flex-col gap-1">
                     <span className="text-[10px] uppercase tracking-wider text-[var(--color-slate)]">Processing</span>

@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Camera, ChevronRight } from "lucide-react";
+import { ArrowLeft, Camera, ChevronRight, Maximize2 } from "lucide-react";
 import {
   SEVERITY_TOKENS,
   VIOLATION_TEMPLATES,
@@ -42,6 +42,10 @@ function formatClock(iso: string | null): string {
 export default function FrameReview({ entries }: FrameReviewProps) {
   const [selectedType, setSelectedType] = useState<ViolationType>(entries[0][0]);
   const [frameIndex, setFrameIndex] = useState(0);
+  // The frame is evidence, and the inline pane caps it at 340px — too small to
+  // examine. Expanding it is the whole point of the page, so it needs a way in
+  // and, more importantly, a way back out.
+  const [expanded, setExpanded] = useState(false);
 
   const bucket = entries.find(([t]) => t === selectedType)?.[1] ?? entries[0][1];
   const tpl = VIOLATION_TEMPLATES[selectedType];
@@ -57,6 +61,24 @@ export default function FrameReview({ entries }: FrameReviewProps) {
     setSelectedType(type);
     setFrameIndex(0);
   }
+
+  // Escape is what people reach for first in a full-screen view, and a viewer
+  // that traps you is worse than no viewer at all. The visible Back button
+  // stays the primary exit — this just covers the reflex.
+  useEffect(() => {
+    if (!expanded) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setExpanded(false);
+    }
+    window.addEventListener("keydown", onKey);
+    // The page behind scrolls under the overlay otherwise.
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [expanded]);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,300px)_minmax(0,1fr)] gap-4">
@@ -113,13 +135,21 @@ export default function FrameReview({ entries }: FrameReviewProps) {
         >
           {/* The frame itself, at a size you can actually read */}
           {activeFrame ? (
-            <div className="relative bg-black">
+            <div className="relative bg-black group">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={`${BACKEND_BASE}${activeFrame}`}
                 alt={tpl.frameCaption}
                 className="w-full max-h-[340px] object-contain"
               />
+              <button
+                onClick={() => setExpanded(true)}
+                aria-label="View frame full screen"
+                className="absolute top-3 right-3 flex items-center gap-1.5 rounded-md bg-black/60 hover:bg-black/80 border border-white/15 px-2.5 py-1.5 text-[11px] font-medium text-white transition-colors cursor-pointer"
+              >
+                <Maximize2 size={12} />
+                Expand
+              </button>
               <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 to-transparent px-4 pt-8 pb-3">
                 <p className="text-[13px] font-medium text-white">{tpl.frameCaption}</p>
                 <p className="font-mono text-[11px] text-white/60 mt-0.5">
@@ -197,6 +227,56 @@ export default function FrameReview({ entries }: FrameReviewProps) {
             </section>
           </div>
         </motion.div>
+      </AnimatePresence>
+
+      {/* Full-screen frame viewer */}
+      <AnimatePresence>
+        {expanded && activeFrame && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            // Clicking the backdrop is the third way out, alongside Back and
+            // Escape. The image stops the propagation so clicking the evidence
+            // itself doesn't dismiss the thing you're trying to look at.
+            onClick={() => setExpanded(false)}
+            className="fixed inset-0 z-50 bg-black/92 flex flex-col"
+          >
+            <div className="flex items-center gap-3 px-5 py-4 shrink-0">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setExpanded(false);
+                }}
+                className="flex items-center gap-2 rounded-md border border-white/15 bg-white/5 hover:bg-white/10 px-3 py-2 text-[12.5px] font-medium text-white transition-colors cursor-pointer"
+              >
+                <ArrowLeft size={14} />
+                Back to report
+              </button>
+              <p className="font-mono text-[11px] text-white/50 ml-auto">
+                Frame {safeIndex + 1} of {frames.length} · Esc to close
+              </p>
+            </div>
+
+            <div className="flex-1 min-h-0 flex items-center justify-center px-5 pb-5">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={`${BACKEND_BASE}${activeFrame}`}
+                alt={tpl.frameCaption}
+                onClick={(e) => e.stopPropagation()}
+                className="max-w-full max-h-full object-contain rounded-lg"
+              />
+            </div>
+
+            <div className="px-5 pb-6 shrink-0 text-center">
+              <p className="text-[13px] font-medium text-white">{tpl.frameCaption}</p>
+              <p className="font-mono text-[11px] text-white/50 mt-1">
+                {formatClock(bucket.first_at)} → {formatClock(bucket.last_at)}
+              </p>
+            </div>
+          </motion.div>
+        )}
       </AnimatePresence>
     </div>
   );

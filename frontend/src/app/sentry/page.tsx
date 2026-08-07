@@ -54,10 +54,15 @@ export default function SentryPage() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const interviewStartedRef = useRef(false);
   /**
-   * Latched once the interview is wrapping up. stopListening() can't retract a
-   * recording the VAD has already captured, so without this a final blob would
-   * still POST a turn — landing on a session the backend has closed and
-   * surfacing a "Session not found" error over the finished report.
+   * Latched once the run is over — by "End session", by Disengage, or by the
+   * interview completing on its own.
+   *
+   * Two things outlive the click that ends a run. stopListening() can't retract
+   * a recording the VAD has already captured, so a final blob would still POST
+   * a turn against a session the backend has closed. And a turn already in
+   * flight owns a chain of awaits that keeps running to completion — it would
+   * speak its reply and reopen the microphone on a session the user just left.
+   * Neither can be cancelled, so both are made to check this flag and bail.
    */
   const sessionEndingRef = useRef(false);
 
@@ -80,6 +85,12 @@ export default function SentryPage() {
     }
   }, [router]);
 
+  // Refreshing this page throws the interview away — `guard_session` survives
+  // in sessionStorage so the guard above still passes, but the session id,
+  // transcript and persona progression are all React-local and gone. The
+  // confirm-then-return-to-landing behaviour that covers it is global rather
+  // than wired up here; see components/RefreshGuard.tsx and lib/refreshPolicy.ts.
+
   // Map turnState → VoiceOrb visual state
   const orbState: VoiceState =
     turnState === "ai-speaking" ? "SPEAK" :
@@ -90,6 +101,10 @@ export default function SentryPage() {
   // TTS
   const speakText = useCallback((text: string): Promise<void> => {
     return new Promise((resolve) => {
+      // The run ended while this turn was still in flight. Cancelling the
+      // synthesiser at that moment can't suppress an utterance that hasn't been
+      // queued yet, so the request has to be refused here instead.
+      if (sessionEndingRef.current) { resolve(); return; }
       if (!("speechSynthesis" in window)) { resolve(); return; }
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
@@ -125,8 +140,16 @@ export default function SentryPage() {
 
   // When user clicks "Disengage" in SniperScope — stop everything
   const handleDisengage = useCallback(() => {
+    // Latch before tearing anything down, so a turn mid-flight sees the run is
+    // over the moment its next await resolves. cancel() alone only silences
+    // what is already queued; the reply still on its way back from the backend
+    // would arrive afterwards and start speaking again.
+    sessionEndingRef.current = true;
     stopListening();
     window.speechSynthesis?.cancel();
+    // cancel() is not guaranteed to fire onend, which would strand the
+    // Interrogator waveform at speaking level after the voice has stopped.
+    endSpeech();
     setInterviewActive(false);
     setTurnState("idle");
     interviewStartedRef.current = false;
@@ -160,6 +183,9 @@ export default function SentryPage() {
     if (!sessionData) return;
 
     const { questions, resume_text } = JSON.parse(sessionData);
+    // Re-arm. Disengage latches the flag to kill the previous run; pressing
+    // Engage starts a new one, and without this reset it would be born dead.
+    sessionEndingRef.current = false;
     setInterviewActive(true);
     setChatHistory([]);
     setTurnState("processing");
@@ -183,6 +209,9 @@ export default function SentryPage() {
       setTurnState("ai-speaking");
       setLiveTranscript(`AI: ${data.opening_message}`);
       await speakText(data.opening_message);
+
+      // Disengaged during the opening line — leave the mic shut.
+      if (sessionEndingRef.current) return;
 
       setTurnState("listening");
       setLiveTranscript("MICROPHONE LIVE. LISTENING…");
@@ -225,6 +254,9 @@ export default function SentryPage() {
       const { transcript } = await transcribeRes.json();
       setIsTranscribing(false);
 
+      // Disengaged while the audio was still uploading.
+      if (sessionEndingRef.current) return;
+
       if (!transcript || transcript.trim().length === 0) {
         setTurnState("listening");
         setLiveTranscript("MICROPHONE LIVE. LISTENING…");
@@ -251,6 +283,10 @@ export default function SentryPage() {
       }
       const turnData = await turnRes.json();
 
+      // Disengaged while the interviewer was composing its reply. Dropping it
+      // here keeps the answer out of a transcript the user has already closed.
+      if (sessionEndingRef.current) return;
+
       setCurrentPersona(turnData.persona);
       setChatHistory((prev) => [...prev, {
         role: "interviewer",
@@ -269,14 +305,19 @@ export default function SentryPage() {
       setTurnState("ai-speaking");
       setLiveTranscript(`AI: ${turnData.response}`);
       await speakText(turnData.response);
+      if (sessionEndingRef.current) return;
       setTurnState("listening");
       setLiveTranscript("MICROPHONE LIVE. LISTENING…");
       startListening();
 
     } catch (err) {
       console.error("Turn processing error:", err);
-      setError(err instanceof Error ? err.message : "Something went wrong");
       setIsTranscribing(false);
+      // A run torn down mid-flight aborts its fetches, so the resulting error
+      // is expected rather than a fault worth reporting — and recovering from
+      // it would reopen the mic the user just closed.
+      if (sessionEndingRef.current) return;
+      setError(err instanceof Error ? err.message : "Something went wrong");
       setTurnState("listening");
       setLiveTranscript("ERROR. RESUMING LISTEN…");
       startListening();

@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono, Inter, Fraunces, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider, THEME_SCRIPT } from "@/lib/theme";
+import { REFRESH_TO_LANDING_SCRIPT } from "@/lib/refreshPolicy";
+import RefreshGuard from "@/components/RefreshGuard";
 
 
 const geistSans = Geist({
@@ -64,8 +66,17 @@ export default function RootLayout({
             on every navigation. Intentionally a blocking inline script —
             do not convert this to a useEffect. See lib/theme.tsx. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+        {/* A refresh sends you back to the landing page. Also blocking, and
+            for a stronger reason than the theme script: the routes it applies
+            to run their own redirect guards on mount, so deciding this in an
+            effect would just add another racing router call. Here the reloaded
+            route never mounts. See lib/refreshPolicy.ts. */}
+        <script dangerouslySetInnerHTML={{ __html: REFRESH_TO_LANDING_SCRIPT }} />
       </head>
       <body className="min-h-full flex flex-col">
+        {/* Asks for confirmation before that redirect happens. Paired with the
+            script above: this is the "are you sure", that is the "then what". */}
+        <RefreshGuard />
         <ThemeProvider>{children}</ThemeProvider>
       </body>
 

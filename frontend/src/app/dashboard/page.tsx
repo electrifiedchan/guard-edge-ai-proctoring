@@ -9,6 +9,9 @@ import { fetchSummary, fmtDuration, TALKING_BAND } from "@/lib/dashboard";
 import { buildDemoSummary } from "@/lib/demoSummary";
 
 import { resolveDisplayName } from "@/lib/greeting";
+import { activeCandidateId } from "@/lib/resumeMemory";
+
+
 import Panel from "@/components/dashboard/Panel";
 import StatCard from "@/components/dashboard/StatCard";
 import ReadinessRing from "@/components/dashboard/ReadinessRing";
@@ -23,9 +26,10 @@ import ThemeToggle from "@/components/ThemeToggle";
 
 
 
-const CANDIDATE_ID = "major_project_candidate_01";
 const DAYS = 84;
 const PREFERRED_NAME_KEY = "guard.preferredName";
+
+
 
 /**
  * Declared up front so the stat row always renders four *labelled* cards, even
@@ -93,8 +97,14 @@ export default function DashboardPage() {
       return;
     }
 
+    // History is scoped to the resume, not the browser — see activeCandidateId.
+    // Resolved inside the effect rather than at module scope: it reads
+    // localStorage, which does not exist during the server render.
+    const candidateId = activeCandidateId();
+
     (async () => {
-      const summary = await fetchSummary(CANDIDATE_ID, DAYS);
+      const summary = await fetchSummary(candidateId, DAYS);
+
       if (cancelled) return;
       if (!summary) setError(true);
       else setData(summary);
@@ -104,6 +114,7 @@ export default function DashboardPage() {
       cancelled = true;
     };
   }, [reloadKey]);
+
 
 
   const retry = useCallback(() => setReloadKey((k) => k + 1), []);

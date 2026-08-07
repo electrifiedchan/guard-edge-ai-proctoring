@@ -108,7 +108,28 @@ export function getActiveResume(): ActiveResume | null {
   }
 }
 
+/**
+ * Identity for everything that is scoped to "this resume": telemetry writes and
+ * the dashboard read alike.
+ *
+ * Both sides previously hardcoded the same literal candidate id, so every
+ * resume on the machine shared one history — upload a new CV and the dashboard
+ * still showed the old one's sessions. Keying on the content hash gives each
+ * resume its own timeline. It lives here, next to the hash it derives from,
+ * because two independent copies of this rule is precisely how the bug started.
+ *
+ * Returns the no-resume identity when nothing is active; that id is expected to
+ * have no history, which is what the caller should render.
+ */
+export const NO_RESUME_CANDIDATE_ID = "guard_no_active_resume";
+
+export function activeCandidateId(): string {
+  const active = getActiveResume();
+  return active?.hash ? `resume_${active.hash}` : NO_RESUME_CANDIDATE_ID;
+}
+
 /** Read a cached parse, honouring the same TTL as the upload page. */
+
 export function readCache(hash: string): CachedPayload["data"] | null {
   try {
     const raw = localStorage.getItem(`${CACHE_PREFIX}${hash}`);
