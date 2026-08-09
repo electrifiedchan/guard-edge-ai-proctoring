@@ -144,9 +144,55 @@ Closed 2026-08-07 — the two leftovers above, resolved:
   "re-upload to start a session", never "you have no past".
 
 
-## 9. Local LLM (Ollama) wiring
+## 9. Local LLM (Ollama) wiring — DONE (2026-08-09)
 
-Set up and wire the local model path end to end.
+Sovereign Mode is real. Previously the README promised "nothing leaves the
+device" while every LLM call went to NVIDIA's cloud — the one `LLM_MODE` check
+that existed (`interviewer.py`) had a stub in its ollama branch returning a
+hardcoded question, so local mode *looked* wired and produced a generic
+interview.
+
+Ollama speaks the OpenAI wire protocol on `/v1`, so this needed no second
+client library — only a shared decision about base_url, api_key and model.
+`backend/core_memory/llm_config.py` (new) owns that, and all four call sites
+import it: `conversation_engine._llm`, `interviewer`, and the two report
+endpoints in `edge_main.py` (~797 and ~1048) that each built their own client
+with the endpoint hardcoded.
+
+**`LLM_MODE=auto` is the new default, and that choice is the point.** It probes
+`localhost:11434` and uses the local model if anything answers. A first-time
+user gets Sovereign Mode by installing Ollama — no config file edit — and a
+user without it still gets a working app. Defaulting to `nvidia` would have
+meant the local path only ever ran for people who already knew it existed,
+which is how the stub survived this long. `ollama` and `nvidia` force the
+choice; forcing local fails loudly rather than quietly falling back, because a
+silent fallback on a privacy mode is worse than an error.
+
+Two things that are not obvious and cost time here:
+
+- **`OLLAMA_MODELS` must be set before the daemon starts.** Windows only hands
+  env vars to newly-created processes, so setting it after the installer
+  launched the service put 1.8 GB on C: regardless. Moved and restarted; the
+  weights now live in `D:\Ollama\models`.
+- **Small models need `response_format`.** `generate_questions` parses the reply
+  as JSON, and a 3B model answers with prose around it often enough that the
+  parse fails — which falls back to canned questions, i.e. looks like a working
+  app that has silently stopped tailoring to the resume. The prompt now asks for
+  an object (schema adherence is better than for a bare array), and
+  `extract_json` recovers from fences and surrounding prose.
+
+Default model is `qwen2.5:3b` (~1.9 GB) — runs without a discrete GPU and holds
+a format well for its size. `OLLAMA_MODEL` overrides it.
+
+Verified end to end against the real local model: 4 resume-tailored questions
+generated, valid JSON, no fallback. Pinned by `backend/test_llm_config.py`
+(25 tests, added to `run_tests.bat`), which uses a stub socket rather than a
+real daemon so it passes on machines without Ollama installed.
+
+Still open: `voice_engine.py` STT is unchanged and still browser-side, so
+"nothing leaves the device" is true of the LLM path but not yet of speech —
+the README already scopes the claim that way (roadmap: local Whisper).
+
 
 ## 10. Shorten the interviewer's speech — DONE
 
@@ -412,6 +458,92 @@ narration from being emitted while the accumulated tier is elevated, because the
 copy is chosen per frame from the current pose while the tier reflects history.
 The frame-level string is arguably correct in isolation — the fix is for the
 narration to acknowledge the standing tier, not to restate the frame.
+
+
+## 13. Auto-capture the recorded-study ground truth — BUILD THIS TOMORROW (2026-08-09), RUN IT MONDAY
+
+The paper's `main-6pg-study.tex` has **39 `??`** waiting on one recorded
+study, 8-10 participants. Everything else about that build is finished and
+verified at 6 pages. See `FOR CONFERENCE PAPER\HANDOFF.md`, section
+"MONDAY", for the macro-by-macro map.
+
+**The bottleneck is not recording, it is labelling.** `bench\study.py`
+already computes all 29 macros from `backend\guard_telemetry.db` plus
+`bench\study_labels.json`. The DB writes itself. The labels file does not
+exist, and hand-annotating 16-30 sessions of video is hours of scrubbing —
+which is what we are removing tomorrow.
+
+### 13a. Guided-protocol recorder — the actual work
+
+Instead of labelling video after the fact, **make the session script the
+label**. A prompter drives the participant through timed segments ("look at
+the screen normally", "read the sheet beside the monitor", "glance at your
+lap") and logs each segment's boundaries. Those boundaries *are* the
+`intervals[]` entries — ground truth is what the participant was told to do,
+recorded at the moment they were told.
+
+Requirements:
+
+- Emit `bench\study_labels.json` directly, in the schema `study.py` already
+  documents (`participants`, `sessions[]` with `session_id` + `condition` +
+  `intervals[]` of `start`/`end`/`truth`/`posture`). Do not invent a second
+  format and a converter.
+- `start`/`end` must be **seconds from the same origin the DB uses**. Check
+  what `timeline_frames` stores before writing a single timestamp; if the
+  prompter's clock and the telemetry clock disagree by even two seconds,
+  every interval is silently misaligned and the numbers will look plausible
+  and be wrong. Same machine, one clock, verify on one throwaway session.
+- Capture the real `session_id` from the running app, not a typed one.
+- Drop a **1-2 s dead zone** at each segment boundary. A participant needs a
+  moment to comply, and labelling that moment as either state is a lie.
+  Unlabelled time is discarded by design, so leaving gaps costs nothing.
+- Log the condition per session: `normal` | `low_light` | `occlusion`.
+
+**Hard rule: the labels must not come from GUARD's own output.** Deriving
+ground truth from the fused verdict, or from `head_pose`, makes the
+evaluation circular and worthless — it would measure the system against
+itself. The prompt schedule is the only admissible source. Same reason we
+never hand-fill `measured-study.tex`.
+
+### 13b. Keep a spot-check, do not trust the protocol blindly
+
+Record the reference video anyway and hand-check **2-3 sessions** against the
+generated labels. Participants do drift off script — someone told to look at
+the screen will glance at the camera, at you, at their phone. Auto labels
+that were never checked against anything are an assertion, not ground truth,
+and Sec. V-C will say how they were produced. Note any drift rate found; if
+it is high, the protocol needs tightening before the remaining sessions, not
+after.
+
+### 13c. Client fps log — optional, and it has a string attached
+
+`\mSFpsMed` / `\mSFpsPFive` are defined but deliberately uncited, because
+client frame rate is not in the telemetry schema. If the recorder logs it,
+they can be filled — **but then Sec. VII's admission that the client stages
+are uninstrumented must be removed in the same edit**, or the paper
+contradicts itself. Skip this if tomorrow runs short; it is the one item here
+with no consequence for the 39 `??`.
+
+### 13d. Monday run order
+
+Consent → 8-10 participants, each recording under normal light and again
+under reduced light, occlusion on a subset. Own hardware and own rooms — a
+fixed rig would remove exactly the postural diversity the design targets,
+and Sec. V-C claims that. Then:
+
+```bat
+python "FOR CONFERENCE PAPER\bench\study.py"
+"FOR CONFERENCE PAPER\compile.bat" study
+python "FOR CONFERENCE PAPER\bench\check_pdf.py" paper\main-6pg-study.pdf --max-pages 6
+```
+
+Target `pages: 6`, `OK`, zero `??`. Then read HANDOFF's "Step 4" — four
+sentences in the paper are only true if the data cooperates (the ordering
+claim, recorded-worse-than-scripted, low-light "holds", cadence ≈ 5 s). If
+one fails, **change the sentence, not the number**.
+
+Fallback if any of this slips: `paper\main-6pg.pdf` is untouched, 6 pages,
+14 refs, passes clean, and makes no claim about recorded sessions.
 
 
 ---

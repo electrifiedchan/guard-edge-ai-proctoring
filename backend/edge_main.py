@@ -19,6 +19,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from core_memory.bea import bea_engine
 import shutil
+from core_memory import llm_config
+import ollama_model_guide
 from core_memory.interviewer import ai_interviewer
 from core_memory.conversation_engine import conversation_engine
 from core_memory.timeline import (
@@ -77,6 +79,12 @@ ALLOWED_ORIGINS = [
 ]
 app.add_middleware(
     CORSMiddleware,
+    # Any localhost port, because Next picks the next free one when 3000 is
+    # taken — a second project on the machine silently moves the dev server to
+    # 3007 and every fetch fails CORS with no error the user can see. A regex
+    # anchored to loopback keeps that from being a debugging session; it grants
+    # nothing to a remote origin, since the server binds to localhost anyway.
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$",
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
@@ -541,6 +549,75 @@ async def get_voice_status():
 
 
 # ---------------------------------------------------------------------------
+# LLM backend — read and switch which brain answers
+# ---------------------------------------------------------------------------
+# Backs the /choose-model page. Without these, changing backend meant editing
+# backend/.env and restarting Python, so the setting was invisible to anyone
+# who was not already reading the source.
+#
+# These write to disk and hold a credential, and this server has no auth yet.
+# That is tolerable only because it binds to localhost — see ALLOWED_ORIGINS.
+# If this ever listens on 0.0.0.0, these two routes need a guard first.
+class LlmModePayload(BaseModel):
+    mode: str
+    provider: str | None = None
+
+
+class LlmKeyPayload(BaseModel):
+    provider: str
+    key: str
+
+
+class OllamaModelPayload(BaseModel):
+    tag: str
+
+
+@app.get("/api/v1/llm/models")
+async def get_llm_models():
+    """What this machine can run, and what it already has.
+
+    Separate from /llm/mode because it is slow relative to it: nvidia-smi is a
+    subprocess and /api/tags is a second HTTP hop, and the chooser polls mode on
+    every visit. The picker is opened deliberately, so it can pay that cost.
+    """
+    return ollama_model_guide.report()
+
+
+@app.post("/api/v1/llm/model")
+async def set_llm_model(payload: OllamaModelPayload):
+    try:
+        llm_config.set_ollama_model(payload.tag)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return llm_config.status()
+
+
+@app.get("/api/v1/llm/mode")
+async def get_llm_mode():
+    return llm_config.status()
+
+
+@app.post("/api/v1/llm/mode")
+async def set_llm_mode(payload: LlmModePayload):
+    try:
+        llm_config.set_mode(payload.mode, payload.provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return llm_config.status()
+
+
+@app.post("/api/v1/llm/key")
+async def set_llm_key(payload: LlmKeyPayload):
+    try:
+        masked = llm_config.set_api_key(payload.provider, payload.key)
+    except ValueError as exc:
+        # 400, not 500: every failure here is the pasted value being wrong,
+        # and the message is written to be shown to the user verbatim.
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"masked": masked, **llm_config.status()}
+
+
+# ---------------------------------------------------------------------------
 # Session breakdown (kept for verdict page compatibility)
 # ---------------------------------------------------------------------------
 # Predicates take a whole telemetry-frame row so we can bucket everything the
@@ -792,19 +869,16 @@ Hard rules:
 - Keep it under 220 words."""
 
     try:
-        client = AsyncOpenAI(
-            base_url="https://integrate.api.nvidia.com/v1",
-            api_key=os.environ.get("NVIDIA_API_KEY"),
-        )
+        client = llm_config.make_client()
         completion = await client.chat.completions.create(
-            model="meta/llama-3.1-8b-instruct",
+            model=llm_config.chat_model(),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.6,
             max_tokens=520,
         )
         ai_report = completion.choices[0].message.content
     except Exception as e:
-        logger.error(f"NVIDIA API error: {e}")
+        logger.error(f"LLM error ({llm_config.describe()}): {e}")
         ai_report = (
             f"Mock Report (API unreachable):\n\n"
             f"You showed up and ran the full session — that takes focus.\n\n"
@@ -1045,14 +1119,10 @@ INSTRUCTIONS:
 Return ONLY the coaching text. No JSON, no markdown headers, no pleasantries."""
 
     try:
-        nvidia_api_key = os.getenv("NVIDIA_API_KEY", "")
-        client = AsyncOpenAI(
-            base_url="https://integrate.api.nvidia.com/v1",
-            api_key=nvidia_api_key,
-        )
+        client = llm_config.make_client()
 
         completion = await client.chat.completions.create(
-            model="meta/llama-3.1-8b-instruct",
+            model=llm_config.chat_model(),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.6,
             max_tokens=800,

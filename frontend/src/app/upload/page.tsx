@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { Upload, FileText, Shield, RotateCcw, Trash2, ArrowRight } from "lucide-react";
 import DashboardButton from "@/components/DashboardButton";
+import { hasChosenMode } from "@/lib/llmMode";
 import {
   getActiveResume,
   purgeLegacyResumeCache,
@@ -82,8 +83,28 @@ export default function UploadPage() {
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState("");
   const [loadingStep, setLoadingStep] = useState(0);
+  /** Set while bouncing a first-timer to the chooser, so the drop-zone does not
+   *  flash on screen for the frame before the route changes. */
+  const [redirecting, setRedirecting] = useState(false);
 
   useEffect(() => {
+    /* The one gate into the app. Every route that starts a run — the landing
+       hero, the navbar, the CTA, the dashboard, and the "go again" buttons on
+       /verdict and /report — funnels through here, so gating this single page
+       covers all of them without seven copies of the same check.
+
+       A first-timer who never picked a brain would otherwise upload a resume,
+       reach /sentry, and only then discover there is no key and no Ollama —
+       three screens away from the cause, with a parsed resume already spent.
+
+       replace(), not push(): the chooser sends them straight back here, and a
+       push would leave Back bouncing between the two forever. */
+    if (!hasChosenMode()) {
+      setRedirecting(true);
+      router.replace("/choose-model?next=/upload");
+      return;
+    }
+
     // Retire v1 cache entries before reading the pointer. They were written
     // when the backend returned no resume_text, so continuing from one meant
     // the interviewer got an empty resume and invented a candidate.
@@ -94,7 +115,7 @@ export default function UploadPage() {
       setRemembered(active);
       setPhase("ready");
     }
-  }, []);
+  }, [router]);
 
   const handleFile = useCallback(async (file: File) => {
     if (!file.name.toLowerCase().endsWith(".pdf")) {
@@ -224,6 +245,12 @@ export default function UploadPage() {
 
   return (
     <main className="relative min-h-screen bg-[var(--color-canvas)] text-[var(--color-parchment)] flex flex-col items-center justify-center px-6 py-12">
+      {redirecting ? (
+        <p className="font-mono text-[11px] uppercase tracking-[0.28em] text-[var(--color-fog)]">
+          Choose your reality…
+        </p>
+      ) : (
+      <>
       {/* Corner identity chip — every page after upload carries it, so upload
           should too. Kept out of the centered layout. */}
       <DashboardButton className="absolute right-5 top-5" />
@@ -406,6 +433,8 @@ export default function UploadPage() {
           </span>
         </div>
       </motion.div>
+      </>
+      )}
     </main>
   );
 }

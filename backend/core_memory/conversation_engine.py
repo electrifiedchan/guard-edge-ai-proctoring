@@ -9,6 +9,8 @@ from enum import Enum
 from dataclasses import dataclass, field
 from openai import AsyncOpenAI
 
+from . import llm_config
+
 logger = logging.getLogger(__name__)
 
 
@@ -177,12 +179,13 @@ class ConversationEngine:
         TLS handshake and connection pool for each interviewer turn and again
         for the final report. Reusing one client keeps the connection warm, so
         subsequent calls skip setup entirely.
+
+        The backend (local Ollama vs NVIDIA cloud) is decided once by
+        `llm_config` — see that module for the mode rules.
         """
         if self._client is None:
-            self._client = AsyncOpenAI(
-                base_url="https://integrate.api.nvidia.com/v1",
-                api_key=self.nvidia_api_key,
-            )
+            self._client = llm_config.make_client()
+            logger.info(f"🧠 Conversation LLM: {llm_config.describe()}")
         return self._client
 
     def _prune_sessions(self) -> None:
@@ -335,7 +338,7 @@ Write in 2nd person ("You did well when..."). Be warm but honest. No bullet poin
         try:
             t_start = time.time()
             completion = await self._llm().chat.completions.create(
-                model="meta/llama-3.1-8b-instruct",
+                model=llm_config.chat_model(),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
                 max_tokens=VERDICT_MAX_TOKENS,
@@ -476,7 +479,7 @@ Interview topics to weave in naturally (don't read verbatim — adapt to convers
 
         try:
             completion = await self._llm().chat.completions.create(
-                model="meta/llama-3.1-8b-instruct",
+                model=llm_config.chat_model(),
                 messages=messages,
                 temperature=0.75,
                 max_tokens=200,
@@ -498,7 +501,7 @@ Generate a brief, warm closing (1-2 sentences). Thank the candidate for their ti
     async def _call_llm(self, prompt: str) -> str:
         try:
             completion = await self._llm().chat.completions.create(
-                model="meta/llama-3.1-8b-instruct",
+                model=llm_config.chat_model(),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
                 max_tokens=150,

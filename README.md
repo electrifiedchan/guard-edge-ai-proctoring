@@ -63,7 +63,15 @@ All of it runs **entirely on your own machine**. **No video ever leaves the devi
 
 </details>
 
-**LLM modes:** 🟢 **Sovereign** (Ollama, fully local, `LLM_MODE=ollama`, any model via `OLLAMA_MODEL`) or 🟡 **Demo** (NVIDIA NIM cloud fallback for low-VRAM laptops, `LLM_MODE=nvidia`). In Sovereign Mode, **nothing leaves the device — including your resume.**
+**LLM modes** — set `LLM_MODE` in `backend/.env`:
+
+| Mode | Behaviour | Resume leaves device? |
+|---|---|---|
+| `auto` *(default)* | Uses local Ollama when it is running, otherwise falls back to the cloud | Only when falling back |
+| `ollama` | 🟢 **Sovereign** — forced local, errors rather than falling back | ❌ Never |
+| `nvidia` | 🟡 **Demo** — NVIDIA NIM cloud, for low-VRAM machines | Yes |
+
+Zero config needed: install Ollama, pull a model, and `auto` finds it on `localhost:11434`. Override the model with `OLLAMA_MODEL` (default `qwen2.5:3b`, ~1.9 GB) or the host with `OLLAMA_HOST`. In Sovereign Mode, **nothing leaves the device — including your resume.**
 
 ---
 
@@ -100,8 +108,13 @@ cd guard-edge-ai-proctoring
 # Backend
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-export LLM_MODE=ollama OLLAMA_MODEL=llama3.1:8b      # or LLM_MODE=nvidia + NVIDIA_API_KEY
 uvicorn backend.edge_main:app --port 8080
+
+# Optional — Sovereign Mode (nothing leaves the device).
+# Install Ollama from https://ollama.com/download, then:
+ollama pull qwen2.5:3b
+# That's it. LLM_MODE defaults to `auto`, which detects the local server.
+# Set OLLAMA_MODELS first if you want the weights off your system drive.
 
 # Frontend (new terminal)
 cd frontend && pnpm install

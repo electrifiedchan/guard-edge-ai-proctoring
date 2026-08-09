@@ -15,8 +15,14 @@ REM Invoke the installed Next binary via node rather than `npx next`: npx will
 REM silently download a transient copy when it cannot resolve the local one,
 REM which masks a broken install and can boot a version other than the one the
 REM lockfile pins.
+REM
+REM No --webpack here: Next 16 defaults to Turbopack, and forcing the old
+REM bundler tripled first-compile time on every route (measured on a cold
+REM .next: / 10.9s -> 6.0s, /practice 2.3s -> 0.8s, /dashboard 5.6s -> 1.6s).
+REM The flag arrived in d773181 with an empty commit body, so it was guarding
+REM nothing that was ever written down.
 echo [2/2] Booting Next.js Frontend (Port 3000)...
-start "GUARD Frontend" cmd /k "cd /d "%ROOT%frontend" && node node_modules\next\dist\bin\next dev --webpack"
+start "GUARD Frontend" cmd /k "cd /d "%ROOT%frontend" && node node_modules\next\dist\bin\next dev"
 
 echo.
 echo Launch sequence initiated! Separate terminal windows have been opened.

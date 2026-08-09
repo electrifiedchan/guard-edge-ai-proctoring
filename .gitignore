@@ -117,6 +117,11 @@ temp.txt
 /d
 /0
 
+# Screenshots dropped by the frontend/verify-*.js Playwright checks. They are
+# regenerated on every run and are evidence of one run, not source — anchored to
+# the frontend root so a deliberately-committed asset under public/ still lands.
+/frontend/shot-*.png
+
 # Misspelled duplicate of files already served from frontend/public/
 /assets/assests/
 

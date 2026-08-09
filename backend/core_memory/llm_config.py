@@ -1,0 +1,390 @@
+"""One place that decides which LLM backend this process talks to.
+
+Ollama speaks the OpenAI wire protocol on `/v1`, so "local vs cloud" is a
+base_url + api_key + model swap — not a second client library and not a second
+code path. Every call site imports `make_client()` and `chat_model()` from here
+so the two backends cannot drift apart.
+
+Three modes, via `LLM_MODE`:
+
+    auto     probe for a local Ollama; use it if it answers, else cloud (default)
+    ollama   force local — fail loudly rather than silently phoning home
+    nvidia   force the NVIDIA NIM cloud endpoint
+
+`auto` is the default on purpose. A first-time user who installs Ollama gets
+Sovereign Mode without editing a config file, and one who has not installed it
+still gets a working app. The alternative — defaulting to `nvidia` — means the
+local path only ever runs for people who already knew it existed.
+"""
+import os
+import re
+import json
+import socket
+import logging
+from pathlib import Path
+from urllib.parse import urlparse
+
+from openai import AsyncOpenAI
+
+logger = logging.getLogger(__name__)
+
+NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+NVIDIA_MODEL = "meta/llama-3.1-8b-instruct"
+
+# ── Cloud providers ──────────────────────────────────────────────────────
+# All of these speak the OpenAI wire protocol, so supporting one more is a row
+# in this table rather than a code path. Both listed here are free to start and
+# need no card — the difference is which console the user finds easier.
+#
+# `env_key` is the variable each provider's key lives under in backend/.env,
+# kept distinct so a user can hold keys for both and switch by flipping
+# LLM_PROVIDER without re-pasting anything.
+CLOUD_PROVIDERS = {
+    "nvidia": {
+        "label": "NVIDIA NIM",
+        "base_url": NVIDIA_BASE_URL,
+        "model": NVIDIA_MODEL,
+        "env_key": "NVIDIA_API_KEY",
+        "prefix": "nvapi-",
+        "console": "https://build.nvidia.com/meta/llama-3_1-8b-instruct",
+    },
+    "groq": {
+        "label": "Groq",
+        "base_url": "https://api.groq.com/openai/v1",
+        "model": "llama-3.1-8b-instant",
+        "env_key": "GROQ_API_KEY",
+        "prefix": "gsk_",
+        "console": "https://console.groq.com/keys",
+    },
+}
+
+DEFAULT_CLOUD_PROVIDER = "nvidia"
+
+OLLAMA_DEFAULT_HOST = "http://localhost:11434"
+# Small enough to run on a laptop without a discrete GPU, and unusually good at
+# holding a format for its size — which matters because `generate_questions`
+# parses the reply as JSON. A weaker 3B model returns prose with a JSON-ish
+# shape and the parse throws.
+OLLAMA_DEFAULT_MODEL = "qwen2.5:3b"
+
+# How long to wait for the local port before deciding nobody is home. This runs
+# on the first LLM call, so it is a latency floor for that request — kept short
+# because a loopback TCP connect either succeeds in microseconds or is refused.
+PROBE_TIMEOUT_SEC = 0.6
+
+_probe_result: bool | None = None
+
+# Runtime overrides, set by the /api/v1/llm/* endpoints.
+#
+# These exist because `load_dotenv()` runs once at import, so rewriting
+# backend/.env does NOT change this process — the user would save a setting,
+# see it persisted, and watch the app carry on with the old one until Python
+# restarted. Writing the file is for the next boot; these are for right now.
+# `None` means "nobody has overridden it", which is not the same as empty.
+_mode_override: str | None = None
+_provider_override: str | None = None
+
+
+def configured_mode() -> str:
+    if _mode_override is not None:
+        return _mode_override
+    return os.getenv("LLM_MODE", "auto").strip().lower()
+
+
+def cloud_provider() -> str:
+    """Which cloud vendor is in play. Falls back rather than raising, because a
+    typo'd LLM_PROVIDER should not take the whole app down."""
+    name = (
+        _provider_override
+        or os.getenv("LLM_PROVIDER", DEFAULT_CLOUD_PROVIDER)
+    ).strip().lower()
+    if name not in CLOUD_PROVIDERS:
+        logger.warning(f"Unknown LLM_PROVIDER {name!r} — using {DEFAULT_CLOUD_PROVIDER}")
+        return DEFAULT_CLOUD_PROVIDER
+    return name
+
+
+def provider_spec(name: str | None = None) -> dict:
+    return CLOUD_PROVIDERS[name or cloud_provider()]
+
+
+def api_key_for(name: str | None = None) -> str:
+    return os.getenv(provider_spec(name)["env_key"], "").strip()
+
+
+def has_api_key(name: str | None = None) -> bool:
+    return bool(api_key_for(name))
+
+
+def mask_key(key: str) -> str:
+    """`nvapi-abc…xyz` → `nvapi-••••wxyz`. Enough to recognise which key is
+    installed, not enough to use it. Short strings collapse entirely rather
+    than leaking a meaningful fraction of themselves."""
+    if not key:
+        return ""
+    if len(key) <= 10:
+        return "•" * len(key)
+    return f"{key[:6]}{'•' * 4}{key[-4:]}"
+
+
+def ollama_base_url() -> str:
+    """Normalise OLLAMA_HOST into an OpenAI-compatible `/v1` base URL.
+
+    Accepts what people actually write: `localhost:11434`, `http://host:11434`,
+    or a URL that already ends in `/v1`.
+    """
+    host = os.getenv("OLLAMA_HOST", OLLAMA_DEFAULT_HOST).strip().rstrip("/")
+    if not host.startswith(("http://", "https://")):
+        host = f"http://{host}"
+    if not host.endswith("/v1"):
+        host = f"{host}/v1"
+    return host
+
+
+def ollama_reachable(force: bool = False) -> bool:
+    """True if something is listening on the Ollama port.
+
+    A TCP connect, not an HTTP GET: it needs no dependency, and the question
+    here is only "is the daemon up". Cached, because in `auto` mode this is
+    consulted on every call and the answer does not change mid-process.
+    """
+    global _probe_result
+    if _probe_result is not None and not force:
+        return _probe_result
+
+    parsed = urlparse(ollama_base_url())
+    host = parsed.hostname or "localhost"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        with socket.create_connection((host, port), timeout=PROBE_TIMEOUT_SEC):
+            _probe_result = True
+    except OSError:
+        _probe_result = False
+    return _probe_result
+
+
+def effective_mode() -> str:
+    """Resolve `auto` to a concrete backend; pass explicit choices through."""
+    mode = configured_mode()
+    if mode in ("ollama", "local"):
+        return "ollama"
+    if mode in ("nvidia", "cloud") or mode in CLOUD_PROVIDERS:
+        return "cloud"
+
+    if ollama_reachable():
+        logger.info(f"🟢 Sovereign Mode — local Ollama at {ollama_base_url()}")
+        return "ollama"
+    logger.info(f"🟡 No local Ollama found — using {provider_spec()['label']} cloud")
+    return "cloud"
+
+
+def is_local() -> bool:
+    return effective_mode() == "ollama"
+
+
+def chat_model() -> str:
+    if is_local():
+        return os.getenv("OLLAMA_MODEL", OLLAMA_DEFAULT_MODEL)
+    # Per-provider override, so someone can point Groq at a 70B without
+    # touching this file: NVIDIA_MODEL, GROQ_MODEL, …
+    spec = provider_spec()
+    return os.getenv(spec["env_key"].replace("_API_KEY", "_MODEL"), spec["model"])
+
+
+def make_client() -> AsyncOpenAI:
+    """An AsyncOpenAI pointed at whichever backend is in effect.
+
+    Ollama ignores the API key, but the OpenAI SDK refuses to construct without
+    a non-empty one — hence the placeholder rather than "".
+    """
+    if is_local():
+        return AsyncOpenAI(base_url=ollama_base_url(), api_key="ollama")
+    spec = provider_spec()
+    return AsyncOpenAI(base_url=spec["base_url"], api_key=api_key_for())
+
+
+def describe() -> str:
+    """One line for startup logs and /health."""
+    if is_local():
+        return f"ollama · {chat_model()} · {ollama_base_url()}"
+    return f"{cloud_provider()} · {chat_model()}"
+
+
+# ── Runtime configuration (the pill page writes through these) ───────────
+
+ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+
+# A key is an opaque credential, so the allowlist is deliberately narrow rather
+# than "anything without a newline". This is what stops a pasted value from
+# carrying `\nADMIN=1` into .env and defining extra variables on next boot.
+_KEY_RE = re.compile(r"^[A-Za-z0-9_\-.]{16,256}$")
+
+
+def validate_key(key: str) -> str:
+    """Return the cleaned key, or raise ValueError with a user-facing reason."""
+    cleaned = (key or "").strip().strip('"').strip("'")
+    if not cleaned:
+        raise ValueError("Paste a key first.")
+    if not _KEY_RE.match(cleaned):
+        raise ValueError(
+            "That does not look like an API key — expected 16+ characters of "
+            "letters, digits, dashes or underscores, on a single line."
+        )
+    return cleaned
+
+
+def write_env_var(name: str, value: str) -> None:
+    """Set one variable in backend/.env, preserving every other line.
+
+    Rewrites in place rather than appending, so saving twice does not leave two
+    conflicting definitions (python-dotenv would silently honour the first).
+    Comments, blank lines and unrelated keys survive byte-for-byte.
+    """
+    line = f"{name}={value}"
+    try:
+        existing = ENV_PATH.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        existing = []
+
+    out, replaced = [], False
+    for row in existing:
+        if row.strip().startswith(f"{name}=") and not row.strip().startswith("#"):
+            out.append(line)
+            replaced = True
+        else:
+            out.append(row)
+    if not replaced:
+        out.append(line)
+
+    ENV_PATH.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def set_api_key(provider: str, key: str) -> str:
+    """Validate, persist, and apply a cloud key. Returns the masked form."""
+    if provider not in CLOUD_PROVIDERS:
+        raise ValueError(f"Unknown provider {provider!r}")
+    cleaned = validate_key(key)
+    env_name = CLOUD_PROVIDERS[provider]["env_key"]
+
+    write_env_var(env_name, cleaned)   # for the next boot
+    os.environ[env_name] = cleaned     # for this one
+    # Never log `cleaned` — masked only, since these lines reach terminals,
+    # CI output and screen shares.
+    logger.info(f"🔑 {provider} key set ({mask_key(cleaned)})")
+    return mask_key(cleaned)
+
+
+def set_mode(mode: str, provider: str | None = None) -> None:
+    """Switch backend at runtime and persist the choice for the next boot."""
+    mode = (mode or "").strip().lower()
+    if mode not in ("auto", "ollama", "cloud"):
+        raise ValueError(f"Unknown mode {mode!r} — expected auto, ollama or cloud")
+
+    global _mode_override, _provider_override
+    _mode_override = mode
+    write_env_var("LLM_MODE", mode)
+
+    if provider:
+        if provider not in CLOUD_PROVIDERS:
+            raise ValueError(f"Unknown provider {provider!r}")
+        _provider_override = provider
+        write_env_var("LLM_PROVIDER", provider)
+
+    if mode != "ollama":
+        # Re-probe on the next `auto` resolution: the user may have started
+        # Ollama since this process booted, and the cached answer would be a lie.
+        global _probe_result
+        _probe_result = None
+
+    logger.info(f"🔀 LLM mode → {mode} ({describe()})")
+
+
+# An Ollama tag, e.g. `qwen2.5:3b` or `hf.co/user/repo:Q4_K_M`. Narrow for the
+# same reason as _KEY_RE: this value is written into .env, so anything that can
+# carry a newline can define extra variables on the next boot. Slash and colon
+# are in because registry paths and quantisation suffixes need them.
+_MODEL_RE = re.compile(r"^[A-Za-z0-9_\-./:]{1,128}$")
+
+
+def set_ollama_model(tag: str) -> str:
+    """Point local mode at a different Ollama model. Returns the cleaned tag.
+
+    Deliberately does NOT verify the model is pulled. The picker already knows
+    what is installed — it reads /api/tags — and refusing an absent tag here
+    would block the legitimate "pull it, then select it" order. A missing model
+    surfaces on the first question with Ollama's own 404, which names the tag.
+    """
+    cleaned = (tag or "").strip()
+    if not cleaned:
+        raise ValueError("Pick a model first.")
+    if not _MODEL_RE.match(cleaned):
+        raise ValueError(
+            "That does not look like an Ollama tag — expected something like "
+            "qwen2.5:3b, on a single line."
+        )
+
+    write_env_var("OLLAMA_MODEL", cleaned)  # for the next boot
+    os.environ["OLLAMA_MODEL"] = cleaned  # for this one
+    logger.info(f"🧠 Ollama model → {cleaned}")
+    return cleaned
+
+
+def status() -> dict:
+    """Everything the pill page needs to render truthfully. No raw keys."""
+    return {
+        "mode": configured_mode(),
+        "effective": effective_mode(),
+        "provider": cloud_provider(),
+        "model": chat_model(),
+        "ollama_reachable": ollama_reachable(force=True),
+        "ollama_model": os.getenv("OLLAMA_MODEL", OLLAMA_DEFAULT_MODEL),
+        "providers": {
+            name: {
+                "label": spec["label"],
+                "model": spec["model"],
+                "console": spec["console"],
+                "prefix": spec["prefix"],
+                "configured": has_api_key(name),
+                "masked": mask_key(api_key_for(name)),
+            }
+            for name, spec in CLOUD_PROVIDERS.items()
+        },
+    }
+
+
+def extract_json(raw: str):
+    """Parse a model reply that is supposed to be JSON.
+
+    Small local models wrap JSON in prose or a markdown fence far more often
+    than the 8B cloud model does, so the fence-stripping that already existed
+    is not enough on its own. Falls back to the outermost bracket pair, which
+    survives a leading "Here are the questions:". Returns None on failure so
+    callers can use their own backup rather than crashing the request.
+    """
+    if not raw:
+        return None
+    text = raw.strip()
+
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1] if "\n" in text else text
+        if text.endswith("```"):
+            text = text[:-3]
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    for opener, closer in (("[", "]"), ("{", "}")):
+        start, end = text.find(opener), text.rfind(closer)
+        if start != -1 and end > start:
+            try:
+                return json.loads(text[start : end + 1])
+            except json.JSONDecodeError:
+                continue
+
+    logger.warning(f"Could not parse JSON from model reply: {raw[:160]!r}")
+    return None

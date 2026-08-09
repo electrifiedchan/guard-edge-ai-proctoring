@@ -23,6 +23,7 @@ import SessionList from "@/components/dashboard/SessionList";
 import EmptyDashboard from "@/components/dashboard/EmptyDashboard";
 import DashboardTour, { useTourSeen } from "@/components/dashboard/DashboardTour";
 import ThemeToggle from "@/components/ThemeToggle";
+import ModeBadge from "@/components/ModeBadge";
 
 
 
@@ -265,6 +266,11 @@ export default function DashboardPage() {
             {/* Appearance switch. Lives on the dashboard rather than the landing
                 page because the landing page is pinned dark (see ForceDark). */}
             <ThemeToggle />
+
+            {/* Which brain is writing the questions, and the way to change it.
+                Sits before the tour button because it reports live state rather
+                than opening a panel. */}
+            <ModeBadge />
 
             {/* "What am I looking at" — the same guided-tour copy the "?" on each
 

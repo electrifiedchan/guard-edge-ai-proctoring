@@ -5,13 +5,20 @@ import logging
 import pdfplumber
 from openai import AsyncOpenAI
 
+from . import llm_config
+
 logger = logging.getLogger(__name__)
 
 
 class AIInterviewer:
     def __init__(self):
-        self.llm_mode = os.getenv("LLM_MODE", "nvidia").lower()
-        self.nvidia_api_key = os.getenv("NVIDIA_API_KEY", "")
+        self._client: AsyncOpenAI | None = None
+
+    def _llm(self) -> AsyncOpenAI:
+        if self._client is None:
+            self._client = llm_config.make_client()
+            logger.info(f"🧠 Interviewer LLM: {llm_config.describe()}")
+        return self._client
 
     def extract_text_from_pdf(self, file_path: str) -> str:
         """Extracts and cleans text from an uploaded PDF resume."""
@@ -38,36 +45,44 @@ Analyze this candidate's resume and generate exactly 4 challenging, tailored beh
 Candidate Resume:
 {resume_text[:4000]}
 
-Return ONLY a valid JSON array of objects. Format:
-[
-  {{"question": "Tell me about a time you...", "focus": "Leadership"}},
-  ...
-]
-Do not include markdown blocks, pleasantries, or extra text. Just the JSON array."""
+Return ONLY a valid JSON object with a "questions" array. Format:
+{{
+  "questions": [
+    {{"question": "Tell me about a time you...", "focus": "Leadership"}},
+    ...
+  ]
+}}
+Do not include markdown blocks, pleasantries, or extra text. Just the JSON object."""
 
         try:
-            if self.llm_mode == "nvidia":
-                client = AsyncOpenAI(
-                    base_url="https://integrate.api.nvidia.com/v1",
-                    api_key=self.nvidia_api_key,
-                )
-                completion = await client.chat.completions.create(
-                    model="meta/llama-3.1-8b-instruct",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.7,
-                    max_tokens=600,
-                )
-                raw_response = completion.choices[0].message.content.strip()
+            # `response_format` is honoured by both backends and is what keeps a
+            # 3B local model from answering with prose. Without it the parse
+            # fails often enough that every session falls back to the canned
+            # questions — which looks like the local path "working".
+            completion = await self._llm().chat.completions.create(
+                model=llm_config.chat_model(),
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+                max_tokens=600,
+                response_format={"type": "json_object"},
+            )
+            questions = llm_config.extract_json(completion.choices[0].message.content)
 
-                if raw_response.startswith("```json"):
-                    raw_response = raw_response[7:-3].strip()
-                elif raw_response.startswith("```"):
-                    raw_response = raw_response[3:-3].strip()
+            # Asking for a JSON *object* to get schema adherence means the model
+            # may wrap the array in a key of its choosing, so unwrap a lone
+            # list-valued field before giving up on it.
+            if isinstance(questions, dict):
+                for value in questions.values():
+                    if isinstance(value, list):
+                        questions = value
+                        break
 
-                return json.loads(raw_response)
-            else:
-                # Placeholder for local Ollama implementation
-                return [{"question": "Ollama mode detected. What is your strongest technical skill?", "focus": "General"}]
+            if not isinstance(questions, list) or not questions:
+                logger.warning("LLM returned no usable questions; using backups")
+                return self._backup_questions()
+
+            valid = [q for q in questions if isinstance(q, dict) and q.get("question")]
+            return valid or self._backup_questions()
 
         except Exception as e:
             logger.error(f"LLM Question Generation failed: {type(e).__name__}: {e}", exc_info=True)
