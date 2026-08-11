@@ -34,6 +34,10 @@ class InterviewSession:
     session_id: str
     resume_text: str
     resume_questions: list[dict]
+    # Parsed off the top of the resume, "" when we could not find one. Never ask
+    # the LLM for this: it is one regex against text we already hold, and a
+    # round trip to name someone would be latency on the critical path.
+    candidate_name: str = ""
     conversation_history: list[ConversationTurn] = field(default_factory=list)
     current_turn: int = 0
     current_persona: Persona = Persona.FRIENDLY_HR
@@ -97,6 +101,81 @@ HARD LENGTH LIMIT — your reply is spoken aloud, so every extra word is dead ai
   "I love that", or any compliment on the answer.
 - Do not summarise or repeat back what the candidate just said.
 - Ask exactly one question, and end your reply on it."""
+
+
+def _extract_candidate_name(resume_text: str) -> str:
+    """Pull the candidate's name off the top of a resume, or "" if unsure.
+
+    Resumes put the name on the first line as a near-universal convention, so
+    this scans the first few non-empty lines and takes the first that looks like
+    a person rather than contact details or a section heading.
+
+    Deliberately conservative: a wrong name is far worse than no name, because
+    the interviewer would confidently address the candidate as someone else for
+    eight turns. Every rejection path falls through to "", and the callers below
+    simply omit the name directive when that happens.
+    """
+    if not resume_text:
+        return ""
+
+    # ALL CAPS is common on resume headers; Name-Case is the other convention.
+    # Middle initials ("A.") and hyphenated or apostrophe'd surnames both count.
+    name_re = re.compile(r"^[A-Z][A-Za-z'’\-\.]*(?:\s+[A-Z][A-Za-z'’\-\.]*){0,3}$")
+    headings = {
+        "resume", "curriculum vitae", "cv", "profile", "personal profile",
+        "contact", "summary",
+    }
+
+    for raw in resume_text.splitlines()[:12]:
+        line = raw.strip().strip("|•·-—–").strip()
+        if not (2 <= len(line) <= 48):
+            continue
+        # Contact rows, addresses, links, degrees — anything but a bare name.
+        if any(c.isdigit() for c in line) or "@" in line:
+            continue
+        if any(tok in line.lower() for tok in ("http", "www.", ".com", "linkedin", "github")):
+            continue
+        if line.lower() in headings:
+            continue
+
+        candidate = " ".join(line.title().split()) if line.isupper() else line
+        if name_re.match(candidate) and len(candidate.split()) >= 2:
+            return candidate
+
+    return ""
+
+
+def _name_directive(session: "InterviewSession") -> str:
+    """The candidate's name, restated as an instruction the model must act on.
+
+    Two strengths on purpose. A cloud 8B model picks the name out of the resume
+    context on its own, and piling on redundant instruction measurably degrades
+    instruction-following on small models — so the local build gets the
+    reinforced version and the cloud build gets the light one.
+
+    The local variant follows the documented recipe for 3B-class instruct
+    models: state the fact, give one imperative rule, show the shape of a
+    correct reply, and restate the name last so it is the most recent token the
+    model saw before generating.
+    """
+    name = session.candidate_name
+    if not name:
+        return ""
+
+    first = name.split()[0]
+
+    if not llm_config.is_local():
+        return f"\n\nThe candidate's name is {name}. Address them as {first}."
+
+    return f"""
+
+CANDIDATE NAME — this is required, not optional:
+The person you are interviewing is named {first}.
+- Use "{first}" by name in your reply.
+- Write "{first}", never "the candidate", "you there", or a generic greeting.
+- Correct: "So {first}, walk me through that migration."
+- Wrong: "So, walk me through that migration."
+The candidate's name is {first}."""
 
 
 def _trim_to_sentences(text: str, max_words: int = 45) -> str:
@@ -171,6 +250,7 @@ class ConversationEngine:
         self.sessions: dict[str, InterviewSession] = {}
         self.nvidia_api_key = os.getenv("NVIDIA_API_KEY", "")
         self._client: AsyncOpenAI | None = None
+        self._client_generation: int = -1
 
     def _llm(self) -> AsyncOpenAI:
         """One shared client for the process.
@@ -182,11 +262,64 @@ class ConversationEngine:
 
         The backend (local Ollama vs NVIDIA cloud) is decided once by
         `llm_config` — see that module for the mode rules.
+
+        REBUILT when llm_config's generation changes. `model=` is read fresh on
+        every call but `base_url` and the auth header are frozen at
+        construction, so without this a provider switch kept posting to the old
+        endpoint: picking Groq sent `llama-3.1-8b-instant` to NVIDIA and got
+        back a bare `404 page not found`.
         """
-        if self._client is None:
+        gen = llm_config.config_generation()
+        if self._client is None or self._client_generation != gen:
             self._client = llm_config.make_client()
+            self._client_generation = gen
             logger.info(f"🧠 Conversation LLM: {llm_config.describe()}")
         return self._client
+
+    async def _complete(self, **kwargs) -> str | None:
+        """Run a completion, falling back to local Ollama if the cloud fails.
+
+        Returns None when every backend is exhausted; the caller then supplies
+        its own hardcoded line. The three tiers are deliberate:
+
+          1. whatever is configured (cloud, usually)
+          2. local Ollama, if it is actually listening
+          3. None -> caller's canned string
+
+        Tier 2 exists because cloud outages are the common case and are not our
+        fault: NVIDIA's NIM free tier returns `400 DEGRADED function cannot be
+        invoked` when its hosted function is unhealthy, which no retry, timeout
+        or parameter change can fix. If a local model is running there is no
+        reason to serve a canned line instead of it.
+        """
+        try:
+            completion = await self._llm().chat.completions.create(
+                model=llm_config.chat_model(), **kwargs
+            )
+            return completion.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"LLM call failed ({llm_config.describe()}): {e}")
+
+        # Already local — tier 2 is the same box that just failed.
+        if llm_config.is_local():
+            return None
+        if not llm_config.ollama_reachable(force=True):
+            logger.error("No local fallback: Ollama is not reachable.")
+            return None
+
+        try:
+            logger.warning("⚠️  Cloud LLM unavailable — falling back to local Ollama.")
+            fallback = AsyncOpenAI(
+                base_url=llm_config.ollama_base_url(), api_key="ollama"
+            )
+            completion = await fallback.chat.completions.create(
+                model=os.getenv("OLLAMA_MODEL", llm_config.OLLAMA_DEFAULT_MODEL),
+                **kwargs,
+            )
+            return completion.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"Local fallback also failed: {e}")
+            return None
 
     def _prune_sessions(self) -> None:
         """Drop sessions past their TTL. Called on create so the dict can't
@@ -222,10 +355,15 @@ class ConversationEngine:
             session_id=session_id,
             resume_text=resume_text,
             resume_questions=questions,
+            candidate_name=_extract_candidate_name(resume_text),
             current_persona=start,
             starting_persona=start,
         )
         self.sessions[session_id] = session
+        if session.candidate_name:
+            logger.info(f"👤 Candidate: {session.candidate_name}")
+        else:
+            logger.info("👤 No name found on resume — interviewer will stay generic.")
 
         opening = await self._generate_opening(session)
         session.conversation_history.append(ConversationTurn(
@@ -337,14 +475,14 @@ Write in 2nd person ("You did well when..."). Be warm but honest. No bullet poin
 
         try:
             t_start = time.time()
-            completion = await self._llm().chat.completions.create(
-                model=llm_config.chat_model(),
+            report = await self._complete(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
                 max_tokens=VERDICT_MAX_TOKENS,
                 timeout=VERDICT_TIMEOUT_SEC,
             )
-            report = completion.choices[0].message.content.strip()
+            if report is None:
+                raise RuntimeError("all LLM backends unavailable")
             logger.info(f"📋 Report generated in {time.time() - t_start:.1f}s")
         except Exception as e:
             logger.error(f"Verdict generation failed: {e}", exc_info=True)
@@ -444,6 +582,7 @@ Write in 2nd person ("You did well when..."). Be warm but honest. No bullet poin
         system_prompt = PERSONA_SYSTEM_PROMPTS[session.starting_persona]
 
         prompt = f"""{system_prompt}
+{_name_directive(session)}
 
 You are starting the interview. The candidate's background includes: {session.resume_text[:500]}
 Their resume highlights topics like: {', '.join(topics)}.
@@ -477,20 +616,27 @@ Interview topics to weave in naturally (don't read verbatim — adapt to convers
             role = "assistant" if turn.role == "interviewer" else "user"
             messages.append({"role": role, "content": turn.content})
 
-        try:
-            completion = await self._llm().chat.completions.create(
-                model=llm_config.chat_model(),
-                messages=messages,
-                temperature=0.75,
-                max_tokens=200,
-                timeout=TURN_TIMEOUT_SEC,
-            )
-            text = completion.choices[0].message.content.strip()
-            return _trim_to_sentences(text)
-        except Exception as e:
-            logger.error(f"Conversation response failed: {e}", exc_info=True)
+        # The name goes LAST for local models, after the history, as its own
+        # system turn. Persona drift on 3B models shows up around turn 5-10, and
+        # a directive buried above a growing transcript is exactly what gets
+        # forgotten first — recency is what makes it stick. Cloud models hold it
+        # fine from the system prompt, so they get it there and not here.
+        name_directive = _name_directive(session)
+        if name_directive and llm_config.is_local():
+            messages.append({"role": "system", "content": name_directive.strip()})
+        elif name_directive:
+            messages[0]["content"] += name_directive
 
+        text = await self._complete(
+            messages=messages,
+            temperature=0.75,
+            max_tokens=200,
+            timeout=TURN_TIMEOUT_SEC,
+        )
+        if text is None:
+            logger.error("Conversation response failed on every backend.")
             return "Could you tell me more about your approach there?"
+        return _trim_to_sentences(text)
 
     async def _generate_wrap_up(self, session: InterviewSession) -> str:
         prompt = f"""You are wrapping up a mock interview as a senior hiring manager.
@@ -499,19 +645,16 @@ Generate a brief, warm closing (1-2 sentences). Thank the candidate for their ti
         return _trim_to_sentences(text, max_words=35)
 
     async def _call_llm(self, prompt: str) -> str:
-        try:
-            completion = await self._llm().chat.completions.create(
-                model=llm_config.chat_model(),
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
-                max_tokens=150,
-                timeout=TURN_TIMEOUT_SEC,
-            )
-            return completion.choices[0].message.content.strip()
-        except Exception as e:
-            logger.error(f"LLM call failed: {e}", exc_info=True)
-
+        text = await self._complete(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=150,
+            timeout=TURN_TIMEOUT_SEC,
+        )
+        if text is None:
+            logger.error("LLM call failed on every backend.")
             return "Thanks for sharing that. Let's continue — tell me more about your experience."
+        return text
 
 
 # Global instance

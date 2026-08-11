@@ -84,6 +84,22 @@ _probe_result: bool | None = None
 _mode_override: str | None = None
 _provider_override: str | None = None
 
+# Bumped every time a runtime override changes. Cached clients compare against
+# this to know their base_url is stale: chat_model() is read per call, but a
+# client's base_url is frozen at construction, so a provider switch would
+# otherwise send the new provider's model name to the OLD provider's endpoint
+# (Groq's `llama-3.1-8b-instant` posted to integrate.api.nvidia.com → 404).
+_config_generation = 0
+
+
+def config_generation() -> int:
+    return _config_generation
+
+
+def _bump_generation() -> None:
+    global _config_generation
+    _config_generation += 1
+
 
 def configured_mode() -> str:
     if _mode_override is not None:
@@ -268,6 +284,9 @@ def set_api_key(provider: str, key: str) -> str:
 
     write_env_var(env_name, cleaned)   # for the next boot
     os.environ[env_name] = cleaned     # for this one
+    # A cached client holds the OLD key in its auth header, so a pasted key
+    # would not take effect until restart without this.
+    _bump_generation()
     # Never log `cleaned` — masked only, since these lines reach terminals,
     # CI output and screen shares.
     logger.info(f"🔑 {provider} key set ({mask_key(cleaned)})")
@@ -296,6 +315,7 @@ def set_mode(mode: str, provider: str | None = None) -> None:
         global _probe_result
         _probe_result = None
 
+    _bump_generation()
     logger.info(f"🔀 LLM mode → {mode} ({describe()})")
 
 

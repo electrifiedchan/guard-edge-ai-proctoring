@@ -57,22 +57,28 @@ def transcribe_audio(file_path: str) -> str:
     """
     model = _get_model()
 
-    segments, info = model.transcribe(
-        file_path,
-        beam_size=5,
-        language="en",
-        vad_filter=True,          # skip silence — faster on sparse audio
-        vad_parameters=dict(
-            min_silence_duration_ms=500,
-        ),
-    )
+    def _run(vad_filter: bool):
+        kwargs = {"beam_size": 5, "language": "en", "vad_filter": vad_filter}
+        if vad_filter:
+            kwargs["vad_parameters"] = dict(min_silence_duration_ms=500)
+        segments, info = model.transcribe(file_path, **kwargs)
+        # `segments` is a generator: nothing is decoded until it is consumed.
+        text = " ".join(s.text.strip() for s in segments).strip()
+        return text, info
 
-    # Materialise generator and join segment texts
-    transcript_parts = []
-    for segment in segments:
-        transcript_parts.append(segment.text.strip())
+    transcript, info = _run(vad_filter=True)
 
-    transcript = " ".join(transcript_parts)
+    # The VAD is tuned for sparse audio, and on a quiet mic or a soft speaker it
+    # classifies the entire clip as silence — the request then succeeds with an
+    # empty transcript, which the caller cannot tell apart from a candidate who
+    # said nothing. Whisper on the raw waveform is slower but makes no such
+    # call, so it earns one retry before we report silence.
+    if not transcript:
+        logger.warning(
+            f"🎙️  VAD found no speech in {info.duration:.1f}s — retrying unfiltered."
+        )
+        transcript, info = _run(vad_filter=False)
+
     logger.info(
         f"🎙️  Transcribed {info.duration:.1f}s audio → {len(transcript)} chars "
         f"(language={info.language}, prob={info.language_probability:.2f})"

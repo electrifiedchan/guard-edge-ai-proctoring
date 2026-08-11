@@ -64,6 +64,15 @@ export default function SessionList({ sessions, limit = 5 }: SessionListProps) {
                   <p className="mt-1 truncate text-xs text-neutral-500">{s.headline}</p>
                 )}
               </div>
+
+              {s.session_id && (
+                <span
+                  className="shrink-0 font-mono text-[11px] text-neutral-500"
+                  title={`Session ${s.session_id}`}
+                >
+                  {s.session_id.slice(-6)}
+                </span>
+              )}
             </Link>
           </li>
         ))}

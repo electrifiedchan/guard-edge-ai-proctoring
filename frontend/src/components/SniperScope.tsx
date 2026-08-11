@@ -212,7 +212,30 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
   // The reference MediaPipe/solvePnP implementations gate at ~10 deg; we sit a
   // little above that because our angles come from the mesh's z channel, which
   // is noisier than a full PnP solve.
-  const PITCH_DELTA_DEG = 13;
+  // Pitch is split by DIRECTION; yaw is not. Down and up are not symmetric
+  // problems even though one angle measures both:
+  //
+  //   - DOWN has a large, well-conditioned signal and a strong prior. Dropping
+  //     the chin swings the face normal through a wide arc, and 13 deg is set
+  //     where it is to sit above a tilted laptop lid at rest.
+  //   - UP is the same rotation run backwards into a worse-conditioned part of
+  //     the estimate. The normal is built from chin(152) -> forehead(10) crossed
+  //     with the eye-corner vector, and on an upward tilt the chin is the
+  //     landmark that moves most, is occluded soonest, and is already the least
+  //     stable point on the mesh (it also moves when the jaw opens, i.e. while
+  //     talking). The elevation of that normal leans on MediaPipe's z channel,
+  //     which the note above already flags as noisier than a full PnP solve.
+  //     The upshot is that up reads SHORT: a genuine look up measures well
+  //     under its true angle and never crosses a threshold set for down.
+  //
+  // Lowering the up threshold is safe here specifically because of the
+  // centred-iris veto in fuseSensors. A spurious 8-13 deg up reading with the
+  // eyes still on the screen is Case B, which vetoes it back to HEAD_CENTER
+  // below HEAD_STRONG_DEG. So this threshold can only produce a flag when the
+  // iris independently agrees the user looked up. Leaning back to think stays
+  // centred and stays unflagged; that is the case the veto exists for.
+  const PITCH_DOWN_DELTA_DEG = 13;
+  const PITCH_UP_DELTA_DEG = 8;
   const YAW_DELTA_DEG = 16;
   // A deflection this large is not a webcam sitting slightly off-axis or mesh
   // jitter — it is a deliberate head movement. Used by fuseSensors to decide
@@ -231,13 +254,19 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
     const dPitch = pitchDeg - (baselinePitch ?? 0);
     const dYaw = yawDeg - (baselineYaw ?? 0);
 
+    // Which pitch threshold applies depends on which way the head went, so it
+    // has to be picked before the tie-break — the tie-break normalises by it,
+    // and normalising an upward deflection by the DOWN threshold would
+    // understate the pitch axis and hand borderline frames to yaw.
+    const pitchDelta = dPitch > 0 ? PITCH_DOWN_DELTA_DEG : PITCH_UP_DELTA_DEG;
+
     // Yaw is still tested first, but now only to pick a winner when both axes
     // fire at once — the axes are independent in a 3D frame, so this is a
     // tie-break, not the correctness crutch it used to be.
-    if (Math.abs(dYaw) > YAW_DELTA_DEG && Math.abs(dYaw) / YAW_DELTA_DEG >= Math.abs(dPitch) / PITCH_DELTA_DEG) {
+    if (Math.abs(dYaw) > YAW_DELTA_DEG && Math.abs(dYaw) / YAW_DELTA_DEG >= Math.abs(dPitch) / pitchDelta) {
       return dYaw > 0 ? "HEAD_LEFT" : "HEAD_RIGHT";
     }
-    if (Math.abs(dPitch) > PITCH_DELTA_DEG) {
+    if (Math.abs(dPitch) > pitchDelta) {
       return dPitch > 0 ? "HEAD_DOWN" : "HEAD_UP";
     }
     if (Math.abs(dYaw) > YAW_DELTA_DEG) {

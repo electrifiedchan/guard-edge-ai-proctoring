@@ -2,6 +2,14 @@
 
 import { useRef, useState, useCallback } from "react";
 
+/**
+ * A WebM container with only its header and no audio cluster still weighs a few
+ * hundred bytes, so `size > 0` does not mean "there is speech in here". ffmpeg
+ * either rejects those outright or Whisper transcribes them as "". Dropping
+ * them here saves a round trip and a 500 in the log that looks like a bug.
+ */
+const MIN_BLOB_BYTES = 2048;
+
 interface UseVADOptions {
   silenceThresholdMs?: number;
   volumeThreshold?: number;
@@ -37,25 +45,39 @@ export function useVAD({
   const hasSpeechRef = useRef(false);
   const stoppedRef = useRef(false);
 
-  const cleanup = useCallback(() => {
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    if (mediaRecorderRef.current?.state === "recording") {
-      mediaRecorderRef.current.stop();
-    }
+  /**
+   * Release the mic and the AudioContext.
+   *
+   * Only safe to call directly when the recorder is NOT running — while it is,
+   * `onstop` owns this teardown, because cutting the tracks before the encoder
+   * flushes produces an unplayable WebM. Both exits below route through here.
+   */
+  const releaseAudio = useCallback(() => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
-    if (audioContextRef.current?.state !== "closed") {
-      audioContextRef.current?.close();
+    if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+      audioContextRef.current.close();
     }
     audioContextRef.current = null;
+  }, []);
+
+  const cleanup = useCallback(() => {
+    stoppedRef.current = true;
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    if (mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.stop();   // onstop releases the mic
+    } else {
+      releaseAudio();
+    }
     analyserRef.current = null;
     mediaRecorderRef.current = null;
     setIsListening(false);
     setIsVoiceActive(false);
+    audioLevelRef.current = 0;
     setAudioLevel(0);
-  }, []);
+  }, [releaseAudio]);
 
   const startListening = useCallback(async () => {
     stoppedRef.current = false;
@@ -86,9 +108,24 @@ export function useVAD({
     };
 
     recorder.onstop = () => {
+      // Tracks and AudioContext are torn down HERE, not at the call site.
+      //
+      // recorder.stop() is asynchronous: it fires a final ondataavailable and
+      // then onstop. Killing the MediaStream tracks on the line after stop()
+      // cut the source out from under the encoder, so the last WebM cluster
+      // never got its header and ffmpeg rejected the whole blob with
+      // "Invalid data found when processing input" (AVERROR_INVALIDDATA).
+      // That was the intermittent 500 on /voice/transcribe -- intermittent
+      // because it depended on whether the flush won the race.
+      releaseAudio();
+
       if (chunksRef.current.length > 0 && hasSpeechRef.current) {
         const blob = new Blob(chunksRef.current, { type: mimeType });
-        onSpeechEnd?.(blob);
+        if (blob.size >= MIN_BLOB_BYTES) {
+          onSpeechEnd?.(blob);
+        } else {
+          console.warn(`[VAD] Discarding ${blob.size}B clip — too short to transcribe.`);
+        }
       }
       chunksRef.current = [];
     };
@@ -122,9 +159,9 @@ export function useVAD({
             silenceStartRef.current = Date.now();
           } else if (Date.now() - silenceStartRef.current >= silenceThresholdMs) {
             stoppedRef.current = true;
+            // Only stop the recorder. onstop tears down the stream and the
+            // AudioContext once the final cluster is flushed.
             if (recorder.state === "recording") recorder.stop();
-            stream.getTracks().forEach((t) => t.stop());
-            if (audioContext.state !== "closed") audioContext.close();
             setIsListening(false);
             setIsVoiceActive(false);
             audioLevelRef.current = 0;
@@ -138,24 +175,20 @@ export function useVAD({
     };
 
     rafRef.current = requestAnimationFrame(tick);
-  }, [silenceThresholdMs, volumeThreshold, onSpeechEnd, cleanup]);
+  }, [silenceThresholdMs, volumeThreshold, onSpeechEnd, releaseAudio]);
 
   const stopListening = useCallback(() => {
     stoppedRef.current = true;
     if (mediaRecorderRef.current?.state === "recording") {
-      mediaRecorderRef.current.stop();
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-    }
-    if (audioContextRef.current?.state !== "closed") {
-      audioContextRef.current?.close();
+      mediaRecorderRef.current.stop();   // onstop releases the mic
+    } else {
+      releaseAudio();
     }
     setIsListening(false);
     setIsVoiceActive(false);
     audioLevelRef.current = 0;
     setAudioLevel(0);
-  }, []);
+  }, [releaseAudio]);
 
   return {
     isListening,

@@ -62,8 +62,24 @@ async def lifespan(app: FastAPI):
         logger.info("🔇 Voice engine disabled via DISABLE_VOICE_ENGINE")
 
     app.state.executor = ThreadPoolExecutor(max_workers=2)
+    # Separate single-thread pool for the fast prop sweep.
+    #
+    # The sweep used to share the pool above with the 5s telemetry loop AND
+    # whisper transcription. Whisper holds a worker for the length of an
+    # utterance, so during speech — which is most of an interview — a sweep
+    # queued behind it, blew PROP_TIMEOUT_MS, and was swallowed by the client's
+    # empty catch. That is the gap between the 177.8 ms measured in
+    # bench/measure.py and the "1.5-3s" the SniperScope comment reports.
+    #
+    # max_workers=1 is deliberate, not a resource compromise: it makes exactly
+    # one thread own yolo_model_prop, which is what keeps that model instance
+    # thread-safe (see the model construction below).
+    app.state.prop_executor = ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="prop-sweep"
+    )
     yield
     app.state.executor.shutdown(wait=False)
+    app.state.prop_executor.shutdown(wait=False)
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +121,25 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 yolo_model = YOLO("yolov8s.pt")
 yolo_model.to(device)
 
+# Second instance, owned exclusively by the single-thread prop_executor.
+#
+# Ultralytics is explicit that sharing one YOLO instance across threads causes
+# race conditions on the predictor's internal state and "unpredictable results"
+# — the model was never designed to be re-entered concurrently. Until now the
+# 5s telemetry loop and the 1.2s prop sweep both drove `yolo_model` from a
+# 2-worker pool, so two inferences genuinely could overlap. That is a latent
+# correctness bug independent of the latency work, and it gets worse with a
+# lower confidence floor, because more boxes survive to be post-processed.
+#
+# Two instances rather than a ThreadingLocked shared one: a lock would serialise
+# the sweep behind the telemetry loop and reintroduce the queueing this change
+# exists to remove. yolov8s weights are ~22 MB, which is the right trade here.
+#
+# The invariant to preserve: yolo_model is only ever touched from
+# app.state.executor, and yolo_model_prop only from app.state.prop_executor.
+yolo_model_prop = YOLO("yolov8s.pt")
+yolo_model_prop.to(device)
+
 # COCO class ids we actually care about.
 #   0  person     — a second person in shot
 #   67 cell phone — the headline cheat signal
@@ -120,11 +155,18 @@ YOLO_WATCH_CLASSES = [0, 67, 73]
 if os.getenv("BEA_WATCH_LAPTOP", "false").lower() == "true":
     YOLO_WATCH_CLASSES.append(63)
 
-# Confidence floor. High enough that a single frame is trustworthy evidence,
-# which is what lets object criticals skip the 3-of-5 debounce.
-YOLO_CONF = float(os.getenv("BEA_YOLO_CONF", "0.65"))
+# Confidence floor. Lowered from 0.65 to 0.35 because 0.65 was a recall problem
+# wearing a latency costume: an angled or partly-occluded phone scores 0.35-0.55,
+# so every one of those frames was discarded silently and the prop sweep only
+# fired once the phone came closer or steadier. That reads as a 3-5 s delay when
+# it is really a miss. 0.35 is still above the Ultralytics default of 0.25.
+#
+# Object criticals still skip the 3-of-5 debounce (see bea.record_critical_signal).
+# A weaker box is no longer treated as no box, so the single-frame evidence claim
+# now rests on the class being a phone at all, not on the score being high.
+YOLO_CONF = float(os.getenv("BEA_YOLO_CONF", "0.35"))
 
-logger.info(f"🔫 YOLOv8s loaded on {device.upper()} | classes={YOLO_WATCH_CLASSES} conf={YOLO_CONF}")
+logger.info(f"🔫 YOLOv8s loaded on {device.upper()} | classes={YOLO_WATCH_CLASSES} conf={YOLO_CONF} (2 instances: telemetry + prop sweep)")
 
 
 
@@ -153,8 +195,17 @@ def determine_verdict(detected_objects: list, faces: int, talking: bool, head_po
     """Returns (gaze, is_critical, critical_kind, verdict, logic_trace).
 
     `critical_kind` splits criticals by how much a single frame can be trusted:
-      "object"    — a phone/book/laptop is physically in shot. YOLO is running at
-                    conf>=0.65 on a specific class, so one frame is proof. Flag now.
+      "object"    — a phone/book/laptop is physically in shot. YOLO is restricted
+                    to a specific class list, so the CLASS is the evidence, not
+                    the score, and one frame is proof. Flag now.
+
+                    The score used to carry that argument at conf>=0.65, but a
+                    high floor discarded angled and partly-occluded phones
+                    outright — a recall failure that presented as latency. The
+                    floor is now YOLO_CONF (0.35); a weaker box is a phone seen
+                    poorly, not the absence of one. What keeps a single frame
+                    trustworthy is the class restriction plus the rising-edge
+                    latch, which bills one prop once however many sweeps see it.
       "transient" — face lost or an extra face. Genuinely noisy: a shadow, a lean
                     out of frame, or someone crossing behind all trip it, so these
                     keep the 3-of-5 debounce.
@@ -304,13 +355,16 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
         # Prop already flagged by the fast sweep — skip escalation so we don't
         # bill it twice, but still write the frame so the verdict page has the
         # visual. Record as neutral telemetry, not as a new violation.
-        risk_packet = await bea_engine.get_status(bea_key)
+        risk_packet = await bea_engine.get_state(bea_key)
     elif is_critical:
         # A visible object is proof on sight; ambiguous signals keep the debounce.
         instant = critical_kind == "object"
         if instant:
-            # Latch it so the sweep doesn't immediately re-flag the same prop.
+            # Latch it so the sweep doesn't immediately re-flag the same prop,
+            # and clear any part-built streak so a stale count can't unlatch it
+            # on the very next clean sweep.
             _prop_seen[bea_key] = True
+            _prop_clear_streak[bea_key] = 0
         decision = await bea_engine.record_critical_signal(
             bea_key, True, verdict, instant=instant
         )
@@ -404,6 +458,23 @@ YOLO_PROP_CLASSES = [c for c in YOLO_WATCH_CLASSES if c != 0]
 # event by the scan rate and drive risk to 100% in seconds.
 _prop_seen: dict[str, bool] = {}
 
+# Consecutive clean sweeps per candidate, used to clear the latch above.
+#
+# The latch previously cleared on a SINGLE clean sweep, which turned one phone
+# into several incidents: detected (latch set) -> one sweep where a hand, a turn,
+# or a soft confidence score hides it (latch cleared) -> visible again (billed a
+# second time). Requiring a RUN of clean sweeps makes "the prop is gone" need
+# more evidence than "the prop is here", which is the correct asymmetry for
+# physical evidence and the same reasoning that lets objects skip the 3-of-5.
+#
+# This matters more at the lowered YOLO_CONF: a weaker box is now kept rather
+# than discarded, so scores sit closer to the floor and cross it more often.
+#
+# At PROP_SCAN_MS = 1200 (SniperScope.tsx), 3 sweeps is ~3.6 s of a genuinely
+# empty frame before the same phone can open a second violation.
+PROP_CLEAR_SWEEPS = int(os.getenv("BEA_PROP_CLEAR_SWEEPS", "3"))
+_prop_clear_streak: dict[str, int] = {}
+
 
 @app.post("/api/v1/scan-objects")
 async def scan_objects(payload: ObjectScanPayload, background_tasks: BackgroundTasks):
@@ -434,8 +505,8 @@ async def scan_objects(payload: ObjectScanPayload, background_tasks: BackgroundT
 
     loop = asyncio.get_running_loop()
     results = await loop.run_in_executor(
-        app.state.executor,
-        lambda: yolo_model(
+        app.state.prop_executor,
+        lambda: yolo_model_prop(
             image, verbose=False, classes=YOLO_PROP_CLASSES,
             imgsz=640, augment=False, conf=YOLO_CONF,
         ),
@@ -444,7 +515,7 @@ async def scan_objects(payload: ObjectScanPayload, background_tasks: BackgroundT
     detected_objects = []
     for r in results:
         for box in r.boxes:
-            label = yolo_model.names[int(box.cls[0])]
+            label = yolo_model_prop.names[int(box.cls[0])]
             detected_objects.append(f"{label} ({float(box.conf[0]):.0%})")
 
     if any("cell phone" in o.lower() for o in detected_objects):
@@ -455,7 +526,16 @@ async def scan_objects(payload: ObjectScanPayload, background_tasks: BackgroundT
         verdict = None
 
     was_seen = _prop_seen.get(bea_key, False)
-    _prop_seen[bea_key] = verdict is not None
+    if verdict is not None:
+        _prop_seen[bea_key] = True
+        _prop_clear_streak[bea_key] = 0
+    else:
+        # Hysteresis: one clean sweep is a dropout, not a departure. Only a
+        # sustained run of them re-arms the latch.
+        streak = _prop_clear_streak.get(bea_key, 0) + 1
+        _prop_clear_streak[bea_key] = streak
+        if streak >= PROP_CLEAR_SWEEPS:
+            _prop_seen[bea_key] = False
 
     # Nothing there, or the same prop we already flagged — stop here.
     #
@@ -963,6 +1043,7 @@ async def reset_session(candidate_id: str):
     # the user hits "Clear memory" stays latched as already-seen, so it would
     # never re-flag for the rest of the run.
     _prop_seen.pop(candidate_id, None)
+    _prop_clear_streak.pop(candidate_id, None)
     return {"status": "success", "message": "Memory cleared."}
 
 
