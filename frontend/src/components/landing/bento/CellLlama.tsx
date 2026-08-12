@@ -1,37 +1,41 @@
 "use client";
 
-import { AnimatedGrade } from "@/components/landing/verdict/AnimatedGrade";
+import { AnimatedScore } from "@/components/landing/verdict/AnimatedScore";
 
 /**
- * VERDICT · LLAMA — Llama 3.1 Coach, a local LLM judge that grades each answer.
+ * VERDICT · LOCAL LLM — a local language model judge that scores each answer.
  *
- * Layout pattern: Linear activity-feed rows (label left, grade badge right, thin
- * hairline divider between rows) → v0 credit-score color tiers on the grades →
+ * Deliberately model-agnostic in copy: the app ships a small default model, but
+ * anyone with more VRAM can point it at a larger one, so the panel never names a
+ * specific model.
+ *
+ * Layout pattern: Linear activity-feed rows (label left, score badge right, thin
+ * hairline divider between rows) → v0 credit-score color tiers on the scores →
  * Sendbird-style italic verdict summary below the rows.
  *
- * Each grade is an <AnimatedGrade>: it flickers slot-machine style then settles
- * on the real grade, staggered per row and looping every ~5s so the panel reads
- * like a live telemetry readout. Theme: VERDICT domain = emerald (not sky).
+ * Each score is an <AnimatedScore>: it counts up to the real percentage, holds,
+ * dips and climbs again, staggered per row, so the panel reads like a live
+ * telemetry readout. Theme: VERDICT domain = emerald (not sky).
  * No purple/pink, no gradients — emerald + amber/red tiers + neutrals only.
  */
 
-const ROWS: { label: string; grade: string; delay: number }[] = [
-  { label: "Composure", grade: "A", delay: 0 },
-  { label: "Clarity", grade: "B+", delay: 400 },
-  { label: "Confidence", grade: "A-", delay: 800 },
+const ROWS: { label: string; score: number; delay: number }[] = [
+  { label: "Composure", score: 94, delay: 0 },
+  { label: "Clarity", score: 78, delay: 400 },
+  { label: "Confidence", score: 88, delay: 800 },
 ];
 
 export default function CellLlama() {
   return (
     <div className="flex flex-col gap-3 p-8 h-full">
       <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-neutral-500 whitespace-nowrap">
-        Verdict · Llama
+        Verdict · Local LLM
       </span>
 
       {/* inset panel — the focal data element (two-tier elevation) */}
       <div className="flex-1 rounded-xl bg-neutral-950 border border-white/[0.06] px-4 py-3 flex flex-col justify-center">
         {/* scored competency rows — Linear-style feed with hairline dividers */}
-        {ROWS.map(({ label, grade, delay }, i) => (
+        {ROWS.map(({ label, score, delay }, i) => (
           <div
             key={label}
             className={`flex items-center justify-between py-1.5 ${
@@ -41,7 +45,7 @@ export default function CellLlama() {
             <span className="font-mono text-xs uppercase tracking-wider text-neutral-300">
               {label}
             </span>
-            <AnimatedGrade final={grade} delay={delay} />
+            <AnimatedScore final={score} delay={delay} />
           </div>
         ))}
 

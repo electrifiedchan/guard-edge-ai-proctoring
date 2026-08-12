@@ -13,9 +13,29 @@ stay distinguishable. What must hold here:
   2. GAZE_* still lands in the same `gaze` risk bucket as its HEAD_* twin, so
      honest wording did not quietly stop attention drift from being scored.
   3. Neither is critical on its own — drift is a warning, not a violation.
+
+The second half of this file covers build_moment_caption, which had the mirror
+image of the same disease: `verdict` narrates ONE frame, but a moment is flagged
+off accumulated risk, so a clean frame inherited a HARD_WARNING badge while
+printing "Candidate is fully engaged and attentive." next to an evidence photo —
+reported from a live run on 2026-08-12.
 """
 
-from edge_main import determine_verdict
+from edge_main import (
+    _classify_moment_caption,
+    build_moment_caption,
+    determine_verdict,
+)
+
+CLEAN = "Candidate is fully engaged and attentive."
+
+
+def _packet(score=75, level="HARD_WARNING", count=4):
+    return {
+        "risk_score": score,
+        "intervention_level": level,
+        "violation_count": count,
+    }
 
 
 def _verdict(pose: str, objects=None, faces: int = 1, talking: bool = False):
@@ -85,6 +105,103 @@ def test_centre_is_clean_and_objects_still_outrank_pose():
     print("PASS centre stays clean and objects still outrank pose")
 
 
+# --------------------------------------------------------------------------
+# build_moment_caption — the caption must explain why the flag fired
+# --------------------------------------------------------------------------
+
+def test_a_clean_frame_is_never_captioned_as_engaged():
+    """The reported bug: HARD_WARNING badge over "fully engaged and attentive"."""
+    caption = build_moment_caption(CLEAN, False, "STRAIGHT", _packet())
+    assert "engaged" not in caption.lower(), (
+        f"clean frame still restates the frame verdict: {caption!r}"
+    )
+    assert "75%" in caption and "HARD_WARNING" in caption, (
+        f"caption does not name the standing tier: {caption!r}"
+    )
+    assert "clean" in caption.lower(), (
+        "caption must say the frame itself was clean — the attached photo shows "
+        f"someone sitting normally: {caption!r}"
+    )
+    print("PASS a clean frame is captioned with the standing tier, not the frame")
+
+
+def test_object_captions_pass_through_untouched():
+    """_classify_moment_caption greps the caption to rebuild MOBILE_DEVICE /
+    PROHIBITED_ITEM — YOLO labels are not stored per frame. Rewriting these
+    strings would silently kill evidence attribution.
+
+    Both writers say "Prohibited item detected on desk." for a book or a second
+    laptop, so the classifier has to match that phrase: keying only on 'book'
+    and 'laptop' made PROHIBITED_ITEM unreachable from any caption the app
+    actually writes."""
+    for verdict, expected in (
+        ("CONFIRMED: CRITICAL: Mobile device detected in frame.", "MOBILE_DEVICE"),
+        ("CRITICAL: Mobile device detected in frame.", "MOBILE_DEVICE"),
+        ("CONFIRMED: CRITICAL: Prohibited item detected on desk.", "PROHIBITED_ITEM"),
+        ("CRITICAL: Prohibited item detected on desk.", "PROHIBITED_ITEM"),
+        # legacy / consolidated rows that leaked the raw YOLO label
+        ("CRITICAL: book detected on desk.", "PROHIBITED_ITEM"),
+        ("CONFIRMED: laptop (82%) in shot", "PROHIBITED_ITEM"),
+    ):
+        caption = build_moment_caption(verdict, True, "STRAIGHT", _packet())
+        assert caption == verdict, f"critical caption was rewritten: {caption!r}"
+        assert _classify_moment_caption(caption) == expected, (
+            f"{verdict!r} classified as "
+            f"{_classify_moment_caption(caption)}, expected {expected}"
+        )
+    print("PASS object criticals pass through and still classify")
+
+
+def test_a_phone_outranks_a_prohibited_item_in_one_caption():
+    """Consolidated reasons can name both. A phone is the graver finding, so it
+    must win — the branch order is the only thing enforcing that."""
+    both = "CONFIRMED: CRITICAL: Mobile device detected in frame.; Prohibited item detected on desk."
+    assert _classify_moment_caption(both) == "MOBILE_DEVICE"
+    print("PASS a phone outranks a prohibited item when a caption names both")
+
+
+def test_a_drifting_frame_keeps_its_own_narration():
+    """When the frame IS the reason, the frame string is the honest caption."""
+    for pose in ("GAZE_DOWN", "HEAD_LEFT"):
+        gaze, is_critical, _, verdict, _ = _verdict(pose)
+        caption = build_moment_caption(verdict, is_critical, gaze, _packet())
+        assert caption == verdict, f"{pose} lost its narration: {caption!r}"
+        assert "drift" in caption.lower()
+    print("PASS drifting frames keep their own narration")
+
+
+def test_the_tier_caption_never_reads_as_an_object_violation():
+    """A tier caption must classify as None, or a clean frame would be filed as
+    a phone/book sighting on the verdict page."""
+    for level in ("HARD_WARNING", "SEVERE_VIOLATION_LOGGED"):
+        caption = build_moment_caption(CLEAN, False, "STRAIGHT", _packet(level=level))
+        assert _classify_moment_caption(caption) is None, (
+            f"tier caption misfiled as an object violation: {caption!r}"
+        )
+    print("PASS tier captions are not mistaken for object violations")
+
+
+def test_captions_stay_within_the_column_width():
+    """The column is TEXT but every other writer truncates at 200."""
+    long_verdict = "CRITICAL: " + "phone " * 90
+    assert len(build_moment_caption(long_verdict, True, "STRAIGHT", _packet())) <= 200
+    huge = _packet(score=100, level="SEVERE_VIOLATION_LOGGED", count=999)
+    assert len(build_moment_caption(CLEAN, False, "STRAIGHT", huge)) <= 200
+    print("PASS captions are truncated to 200 characters")
+
+
+def test_a_missing_count_does_not_print_a_dangling_phrase():
+    """violation_count can be 0/absent; the caption must still read as English."""
+    for packet in ({"risk_score": 90, "intervention_level": "HARD_WARNING"}, _packet(count=0)):
+        caption = build_moment_caption(CLEAN, False, "STRAIGHT", packet)
+        assert "earlier flag" not in caption, f"dangling count phrase: {caption!r}"
+        assert "90%" in caption or "75%" in caption
+    # singular vs plural
+    assert "1 earlier flag." in build_moment_caption(CLEAN, False, "STRAIGHT", _packet(count=1))
+    assert "4 earlier flags." in build_moment_caption(CLEAN, False, "STRAIGHT", _packet(count=4))
+    print("PASS the earlier-flag phrase is omitted at zero and agrees in number")
+
+
 if __name__ == "__main__":
     test_gaze_labels_never_claim_the_head_moved()
     test_head_labels_still_say_head()
@@ -92,4 +209,11 @@ if __name__ == "__main__":
     test_gaze_shares_risk_bucket_with_its_head_twin()
     test_drift_is_a_warning_not_a_critical()
     test_centre_is_clean_and_objects_still_outrank_pose()
+    test_a_clean_frame_is_never_captioned_as_engaged()
+    test_object_captions_pass_through_untouched()
+    test_a_phone_outranks_a_prohibited_item_in_one_caption()
+    test_a_drifting_frame_keeps_its_own_narration()
+    test_the_tier_caption_never_reads_as_an_object_violation()
+    test_captions_stay_within_the_column_width()
+    test_a_missing_count_does_not_print_a_dangling_phrase()
     print("\nAll verdict narration tests passed.")

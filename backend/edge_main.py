@@ -263,6 +263,42 @@ def determine_verdict(detected_objects: list, faces: int, talking: bool, head_po
     return gaze, is_critical, critical_kind, verdict, logic_trace
 
 
+def build_moment_caption(
+    verdict: str, is_critical: bool, gaze: str, risk_packet: dict
+) -> str:
+    """Caption for a flagged moment, written against the reason it was flagged.
+
+    `verdict` narrates ONE frame; `autopsy_flag` fires off accumulated risk
+    (>=75%, see bea._level_for). Those are different time horizons, so a frame
+    that is clean right now can be flagged for history it did not cause — and
+    reusing the frame string there printed "Candidate is fully engaged and
+    attentive." next to a HARD_WARNING badge and an evidence photo. Both halves
+    were true in isolation; together they read as a contradiction, and the photo
+    read as proof of nothing.
+
+    So: when the frame itself is the reason (critical, or eyes/head off-centre),
+    the frame string is the honest caption and is kept verbatim — object
+    criticals in particular MUST pass through unchanged, because
+    _classify_moment_caption recovers MOBILE_DEVICE / PROHIBITED_ITEM by reading
+    the object phrasing back out of this text.
+
+    Otherwise the caption names the standing tier and says outright that this
+    frame was clean, which is what the attached image actually shows.
+    """
+    if is_critical or gaze != "STRAIGHT":
+        return verdict[:200]
+
+    score = risk_packet.get("risk_score", 0)
+    level = risk_packet.get("intervention_level", "WARNING")
+    count = risk_packet.get("violation_count", 0)
+
+    earlier = f" from {count} earlier flag{'' if count == 1 else 's'}" if count else ""
+    return (
+        f"Accumulated risk held at {score}% ({level}){earlier}. "
+        "This frame itself was clean — captured for context."
+    )[:200]
+
+
 # ---------------------------------------------------------------------------
 # Frame payload model
 # ---------------------------------------------------------------------------
@@ -411,7 +447,7 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
     # Write evidence frame and log as a moment when BEA flags it
     if autopsy_flag:
         evidence_url = write_evidence_frame(session_id, payload.image_base64)
-        moment_caption = verdict[:200]
+        moment_caption = build_moment_caption(verdict, is_critical, gaze, risk_packet)
         background_tasks.add_task(
             insert_moment,
             uuid.uuid4().hex,
@@ -723,11 +759,20 @@ def _classify_moment_caption(caption: str) -> str | None:
     YOLO labels aren't stored per frame, so phone/book criticals can't be
     rebuilt from timeline_frames. Their verdict text is preserved in the
     moment caption, which is enough to attribute the captured JPEG.
+
+    The phrase list must match what determine_verdict and sweep_for_props
+    actually emit, not what the YOLO class is called. Both writers say
+    "Prohibited item detected on desk." for a book or a second laptop — the
+    words 'book' and 'laptop' never survive into the caption, so matching only
+    on those meant every book/laptop sighting classified as None and
+    PROHIBITED_ITEM was unreachable from a caption. The raw-label spellings are
+    kept too: they still appear in rows written before this was fixed, and in
+    consolidated multi-reason strings.
     """
     c = (caption or "").lower()
     if "mobile" in c or "phone" in c:
         return "MOBILE_DEVICE"
-    if "book" in c or "laptop" in c:
+    if "prohibited item" in c or "book" in c or "laptop" in c:
         return "PROHIBITED_ITEM"
     return None
 
