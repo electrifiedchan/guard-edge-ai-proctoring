@@ -5,6 +5,8 @@ from typing import Dict, Any
 
 CRITICAL_BUFFER_SIZE = 5     # Last N frames considered
 CRITICAL_THRESHOLD = 3       # Confirm lockout only when N-of-M frames are critical
+MULTIPLE_FACES_THRESHOLD = int(os.getenv("BEA_MULTIPLE_FACES_THRESHOLD", "2"))
+NO_FACE_THRESHOLD = int(os.getenv("BEA_NO_FACE_THRESHOLD", "3"))
 
 # --- Wall-clock duration tiers (seconds, env-configurable) ---
 # DOWN = looking at desk/lap. Lenient by default since keyboards/notes are legitimate.
@@ -39,6 +41,10 @@ class BehavioralEventAccumulator:
             "critical_flags": [],
             "critical_buffer": [],
             "pending_critical_reasons": [],
+            "multiple_faces_streak": 0,
+            "no_face_streak": 0,
+            "multiple_faces_confirmed": False,
+            "no_face_confirmed": False,
             # Wall-clock duration trackers (None = not currently in that gaze state)
             "down_started_at": None,
             "side_started_at": None,
@@ -60,15 +66,17 @@ class BehavioralEventAccumulator:
         is_critical: bool,
         reason: str = "",
         instant: bool = False,
+        signal_type: str | None = None,
     ) -> dict:
-        """Rolling 3-of-5 critical buffer. Filters single-frame anomalies (lighting glitches,
-        someone walking past briefly) from sustained violations (real phone, real second person).
+        """Confirm critical evidence using rules appropriate to each signal.
 
-        `instant=True` bypasses the buffer and confirms on this frame alone. Use it for
-        unambiguous physical evidence — a phone in shot is a phone in shot, and at a 5s
-        frame cadence the 3-of-5 window meant ~15 seconds of holding it before anything
-        registered. Ambiguous, transient signals (face briefly lost, someone crossing
-        behind) still go through the buffer, where the debounce genuinely earns its keep.
+        Multiple faces require two consecutive samples; no face requires three.
+        Their state is separate, so alternating failures cannot combine into a
+        misleading confirmation. Other ambiguous signals retain the legacy
+        rolling 3-of-5 buffer.
+
+        `instant=True` bypasses confirmation and accepts this frame alone. Use it
+        for unambiguous physical evidence such as a phone in shot.
 
         Returns:
             {confirmed, count, threshold, window, pending_reasons}
@@ -79,6 +87,49 @@ class BehavioralEventAccumulator:
             await self._ensure_candidate(candidate_id)
             state = self.memory[candidate_id]
             state["last_activity"] = time.time()
+
+            if signal_type in {"multiple_faces", "no_face"}:
+                active_key = f"{signal_type}_streak"
+                confirmed_key = f"{signal_type}_confirmed"
+                other_key = (
+                    "no_face_streak"
+                    if signal_type == "multiple_faces"
+                    else "multiple_faces_streak"
+                )
+                other_confirmed_key = (
+                    "no_face_confirmed"
+                    if signal_type == "multiple_faces"
+                    else "multiple_faces_confirmed"
+                )
+                state[active_key] = state[active_key] + 1 if is_critical else 0
+                state[other_key] = 0
+                state[other_confirmed_key] = False
+                threshold = (
+                    MULTIPLE_FACES_THRESHOLD
+                    if signal_type == "multiple_faces"
+                    else NO_FACE_THRESHOLD
+                )
+                count = state[active_key]
+                newly_confirmed = (
+                    is_critical and count >= threshold and not state[confirmed_key]
+                )
+                if newly_confirmed:
+                    state[confirmed_key] = True
+                return {
+                    "confirmed": newly_confirmed,
+                    "active_confirmed": state[confirmed_key],
+                    "count": count,
+                    "threshold": threshold,
+                    "window": threshold,
+                    "instant": False,
+                    "pending_reasons": [reason] if is_critical and reason else [],
+                }
+
+            if not is_critical:
+                state["multiple_faces_streak"] = 0
+                state["no_face_streak"] = 0
+                state["multiple_faces_confirmed"] = False
+                state["no_face_confirmed"] = False
 
             state["critical_buffer"].append(bool(is_critical))
             if is_critical and reason:
@@ -292,6 +343,12 @@ class BehavioralEventAccumulator:
     def _calculate_risk(self, candidate_id: str, events: list, current_time: float) -> dict:
         count = len(events)
         risk_score = min(count * 20, 100)
+
+        # A confirmed critical flag is objective evidence, not a transient
+        # telemetry tier. Do not let the next clean gaze frame make a phone
+        # incident appear as a 20% or 40% session in the live panel or verdict.
+        if self.memory.get(candidate_id, {}).get("critical_flags"):
+            risk_score = 100
 
         recent_burst = len([t for t in events if current_time - t < 30])
         if recent_burst >= 3:

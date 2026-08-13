@@ -6,6 +6,7 @@ import { activeCandidateId } from "@/lib/resumeMemory";
 import PersonaPicker from "@/components/PersonaPicker";
 import { DEFAULT_PERSONA, type PersonaId } from "@/lib/personas";
 
+const TELEMETRY_INTERVAL_MS = 1000;
 
 export interface RiskPacket {
   candidate_id: string;
@@ -115,14 +116,14 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
     gaze_vector: [0, 0],
     // Pose agreed across consecutive rAF frames. Written alongside head_pose so
     // the two can never disagree; without it, a single blink-misfire frame from
-    // the 30fps gatekeeper was stamped onto the whole 5s inference window as the
-    // frame verdict (telemetry is written per-frame but only READ on the 5s cadence).
+    // the 30fps gatekeeper was stamped onto the whole inference window as the
+    // frame verdict. Telemetry now samples once per second.
     stable_pose: "HEAD_CENTER" as string | null,
   });
   const gatekeeperRef = useRef<{ camera: any; faceMesh: any } | null>(null);
 
   // Trailing window of per-frame pose calls, used to smooth the gatekeeper's
-  // ~30fps output down to the 5s reporting cadence. The inference loop reads
+  // ~30fps output before the reporting cadence. The inference loop reads
   // telemetryRef at an arbitrary instant, so before this it was sampling ONE
   // frame out of ~150 and calling that the verdict for the window — a single
   // frame of iris jitter crossing GAZE_DELTA_Y was enough to report a drift
@@ -159,7 +160,7 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
 
   // Stable reference to parent callback — prevents the inference loop from being
   // re-created on every parent render, which previously spawned parallel loop chains
-  // and produced ~10x the intended request rate (DB rows showed 500 ms cadence vs 5 s spec).
+  // and produced ~10x the intended request rate (DB rows showed 500 ms cadence).
   const onTelemetryUpdateRef = useRef(onTelemetryUpdate);
   useEffect(() => {
     onTelemetryUpdateRef.current = onTelemetryUpdate;
@@ -653,7 +654,7 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
           if (faces === 1) {
             // eyeW/faceH are the head-on reference geometry the yaw-invariant
             // normaliser needs. Only meaningful while the user is facing forward,
-            // which is exactly the contract of this 5s window.
+            // which is exactly the contract of this calibration window.
             const eyeWObs = lOk && rOk ? (lWidth + rWidth) / 2 : lOk ? lWidth : rOk ? rWidth : 0;
             if (eyeWObs > EYE_MIN_WIDTH && faceH > 1e-6) {
               calibrationRef.current.samples.push({
@@ -938,11 +939,11 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
   // useCallback with no deps + refs for changing values keeps this function reference
   // stable for the component's lifetime. This is critical: if the reference changed
   // on parent re-renders, the scheduling useEffect would re-fire and spawn parallel
-  // chains, causing the 500ms-cadence pile-up we observed in the DB.
+  // chains, causing the cadence pile-up we observed in the DB.
   const runInferenceLoop = useCallback(async () => {
     if (!loopRunningRef.current) return; // chain was cancelled (disengage / unmount)
     if (!videoRef.current || !canvasRef.current) {
-      loopTimerRef.current = setTimeout(runInferenceLoop, 5000);
+      loopTimerRef.current = setTimeout(runInferenceLoop, TELEMETRY_INTERVAL_MS);
       return;
     }
 
@@ -978,7 +979,7 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
 
       if (calibrationRef.current.isCalibrating) {
         // Skip payload POST and wait for baseline lock
-        if (loopRunningRef.current) loopTimerRef.current = setTimeout(runInferenceLoop, 5000);
+        if (loopRunningRef.current) loopTimerRef.current = setTimeout(runInferenceLoop, TELEMETRY_INTERVAL_MS);
         return;
       }
 
@@ -1023,7 +1024,7 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
 
     // Schedule next tick only if the chain is still alive.
     if (loopRunningRef.current) {
-      loopTimerRef.current = setTimeout(runInferenceLoop, 5000);
+      loopTimerRef.current = setTimeout(runInferenceLoop, TELEMETRY_INTERVAL_MS);
     }
   }, []);
 
@@ -1047,17 +1048,9 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
   }, [isScanning, isFaceMeshReady, runInferenceLoop]);
 
 
-  // ── Fast prop sweep (independent of the 5s telemetry chain) ─────────────
-  // The loop above is pinned to 5s because timeline.DASHBOARD_CADENCE_SEC
-  // treats "1 frame = 5 seconds" when converting frame counts into durations
-  // (speaking time, longest focus streak). Speeding it up would silently
-  // inflate every one of those numbers.
-  //
-  // But a 5s sample only catches a prop held up for longer than 5s — and the
-  // next tick is scheduled AFTER the fetch resolves, so the real gap is 5s
-  // plus round-trip. Anything raised and lowered in between was never sampled
-  // at all. This second chain hits a YOLO-only endpoint that writes no frames,
-  // so it can run fast without corrupting the dashboard's time math.
+  // ── Fast prop sweep (independent of the telemetry chain) ─────────────────
+  // This YOLO-only endpoint writes no timeline frames, so object detection can
+  // keep its own cadence and rising-edge contract.
   const propCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const propTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const propRunningRef = useRef(false);
@@ -1117,7 +1110,7 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
           // Only paint on a real escalation. The backend returns the rising
           // edge only, so a prop sitting in frame reports escalated=false on
           // every subsequent sweep — repainting from those would stomp the
-          // verdict the 5s loop owns.
+          // verdict the full telemetry loop owns.
           if (data.escalated && data.risk_packet) {
             setRiskScore(data.risk_packet.risk_score);
             setViolationCount(data.risk_packet.violation_count);
@@ -1329,7 +1322,7 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
 
           {sysStatus === "ACTIVE" && (
             <span className="px-2.5 py-1 rounded-md text-[11px] font-medium uppercase backdrop-blur-md border bg-[var(--color-surface)]/70 border-[var(--color-hairline)] text-[var(--color-slate)]">
-              5s composure · 1.2s objects
+              1s composure · 1.2s objects
             </span>
 
           )}

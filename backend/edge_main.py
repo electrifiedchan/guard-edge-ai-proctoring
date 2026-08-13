@@ -62,18 +62,9 @@ async def lifespan(app: FastAPI):
         logger.info("🔇 Voice engine disabled via DISABLE_VOICE_ENGINE")
 
     app.state.executor = ThreadPoolExecutor(max_workers=2)
-    # Separate single-thread pool for the fast prop sweep.
-    #
-    # The sweep used to share the pool above with the 5s telemetry loop AND
-    # whisper transcription. Whisper holds a worker for the length of an
-    # utterance, so during speech — which is most of an interview — a sweep
-    # queued behind it, blew PROP_TIMEOUT_MS, and was swallowed by the client's
-    # empty catch. That is the gap between the 177.8 ms measured in
-    # bench/measure.py and the "1.5-3s" the SniperScope comment reports.
-    #
-    # max_workers=1 is deliberate, not a resource compromise: it makes exactly
-    # one thread own yolo_model_prop, which is what keeps that model instance
-    # thread-safe (see the model construction below).
+    # Keep object inference separate from transcription so speech processing
+    # cannot queue or time out a prop scan. One worker also guarantees that the
+    # YOLO predictor is never re-entered concurrently.
     app.state.prop_executor = ThreadPoolExecutor(
         max_workers=1, thread_name_prefix="prop-sweep"
     )
@@ -118,25 +109,6 @@ app.mount("/api/v1/evidence", StaticFiles(directory=EVIDENCE_DIR), name="evidenc
 # ---------------------------------------------------------------------------
 import torch
 device = "cuda" if torch.cuda.is_available() else "cpu"
-yolo_model = YOLO("yolov8s.pt")
-yolo_model.to(device)
-
-# Second instance, owned exclusively by the single-thread prop_executor.
-#
-# Ultralytics is explicit that sharing one YOLO instance across threads causes
-# race conditions on the predictor's internal state and "unpredictable results"
-# — the model was never designed to be re-entered concurrently. Until now the
-# 5s telemetry loop and the 1.2s prop sweep both drove `yolo_model` from a
-# 2-worker pool, so two inferences genuinely could overlap. That is a latent
-# correctness bug independent of the latency work, and it gets worse with a
-# lower confidence floor, because more boxes survive to be post-processed.
-#
-# Two instances rather than a ThreadingLocked shared one: a lock would serialise
-# the sweep behind the telemetry loop and reintroduce the queueing this change
-# exists to remove. yolov8s weights are ~22 MB, which is the right trade here.
-#
-# The invariant to preserve: yolo_model is only ever touched from
-# app.state.executor, and yolo_model_prop only from app.state.prop_executor.
 yolo_model_prop = YOLO("yolov8s.pt")
 yolo_model_prop.to(device)
 
@@ -165,8 +137,13 @@ if os.getenv("BEA_WATCH_LAPTOP", "false").lower() == "true":
 # A weaker box is no longer treated as no box, so the single-frame evidence claim
 # now rests on the class being a phone at all, not on the score being high.
 YOLO_CONF = float(os.getenv("BEA_YOLO_CONF", "0.35"))
+# A phone held near the desk/lap occupies few pixels in a 16:9 webcam frame.
+# This phone-only pass is deliberately more sensitive, but it needs two sweeps
+# before escalating so a weak one-frame box cannot become an accusation.
+PHONE_LOWER_CONF = float(os.getenv("BEA_PHONE_LOWER_CONF", "0.20"))
+PHONE_LOWER_CONFIRMATIONS = int(os.getenv("BEA_PHONE_LOWER_CONFIRMATIONS", "2"))
 
-logger.info(f"🔫 YOLOv8s loaded on {device.upper()} | classes={YOLO_WATCH_CLASSES} conf={YOLO_CONF} (2 instances: telemetry + prop sweep)")
+logger.info(f"🔫 YOLOv8s loaded on {device.upper()} | classes={YOLO_WATCH_CLASSES} conf={YOLO_CONF}")
 
 
 
@@ -206,9 +183,8 @@ def determine_verdict(detected_objects: list, faces: int, talking: bool, head_po
                     poorly, not the absence of one. What keeps a single frame
                     trustworthy is the class restriction plus the rising-edge
                     latch, which bills one prop once however many sweeps see it.
-      "transient" — face lost or an extra face. Genuinely noisy: a shadow, a lean
-                    out of frame, or someone crossing behind all trip it, so these
-                    keep the 3-of-5 debounce.
+      "no_face" / "multiple_faces" — confirmed independently with consecutive
+                    samples so one condition cannot count toward the other.
 
     Object detection is checked BEFORE face count. A candidate raising a phone
     usually occludes or turns their face at the same moment, so a face-first
@@ -229,11 +205,11 @@ def determine_verdict(detected_objects: list, faces: int, talking: bool, head_po
         verdict = "CRITICAL: Prohibited item detected on desk."
     elif faces == 0:
         is_critical = True
-        critical_kind = "transient"
+        critical_kind = "no_face"
         verdict = "CRITICAL: Candidate face not visible or obscured."
     elif faces > 1:
         is_critical = True
-        critical_kind = "transient"
+        critical_kind = "multiple_faces"
         verdict = "CRITICAL: Multiple persons detected in frame."
     elif head_pose in ["HEAD_LEFT", "HEAD_RIGHT", "HEAD_UP"]:
         gaze = "SIDE_OR_UP"
@@ -351,23 +327,10 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
         logger.error(f"❌ Image decode error: {e}")
         raise HTTPException(status_code=400, detail="Invalid image payload.")
 
-    # --- PHASE 2: YOLO (off event-loop, non-blocking) ---
-    loop = asyncio.get_running_loop()
-    results = await loop.run_in_executor(
-        app.state.executor,
-        lambda: yolo_model(
-            image, verbose=False, classes=YOLO_WATCH_CLASSES,
-            imgsz=640, augment=False, conf=YOLO_CONF,
-        ),
-    )
+    # Object inference has its own rising-edge endpoint and cadence. Running the
+    # same CPU-heavy YOLO model here delayed gaze/face telemetry by several
+    # seconds and duplicated every object scan.
     detected_objects = []
-    for r in results:
-        for box in r.boxes:
-            cls_id = int(box.cls[0])
-            label = yolo_model.names[cls_id]
-            conf = float(box.conf[0])
-            detected_objects.append(f"{label} ({conf:.0%})")
-    logger.info(f"🔫 YOLO: {detected_objects or 'Nothing detected'}")
 
     # --- PHASE 3: Deterministic verdict ---
     gaze, is_critical, critical_kind, verdict, logic_trace = determine_verdict(
@@ -378,15 +341,8 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
     )
 
     # --- PHASE 4: BEA temporal graph ---
-    # Objects are owned by the fast prop sweep, which sees strictly more than
-    # this loop does (1.2s vs 5s) and flags on the rising edge. If it has
-    # already latched this prop, re-confirming here would bill one phone twice
-    # per incident and march risk toward a lockout the user never earned.
-    # The frame is still recorded — it just doesn't open a second violation.
-    #
-    # Guarded on the latch, not on critical_kind alone, so this loop remains a
-    # full fallback: if the sweep is unreachable the latch stays False and the
-    # escalation below still fires exactly as it did before.
+    # Objects are owned by the prop sweep and flag on the rising edge. This path
+    # handles face, speech, and pose signals without waiting on object inference.
     if is_critical and critical_kind == "object" and _prop_seen.get(bea_key, False):
         # Prop already flagged by the fast sweep — skip escalation so we don't
         # bill it twice, but still write the frame so the verdict page has the
@@ -402,7 +358,7 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
             _prop_seen[bea_key] = True
             _prop_clear_streak[bea_key] = 0
         decision = await bea_engine.record_critical_signal(
-            bea_key, True, verdict, instant=instant
+            bea_key, True, verdict, instant=instant, signal_type=critical_kind
         )
 
         if decision["confirmed"]:
@@ -415,6 +371,13 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
                 if decision.get("instant")
                 else f"CONFIRMED ({decision['count']}/{decision['threshold']}): {consolidated}"
             )
+        elif decision.get("active_confirmed"):
+            # One uninterrupted face incident gets one violation and one proof
+            # frame. Keep the standing risk visible without writing duplicates
+            # on every subsequent one-second sample.
+            risk_packet = await bea_engine.get_state(bea_key)
+            risk_packet["autopsy_flag"] = False
+            verdict = f"CONFIRMED (ongoing): {verdict}"
         else:
             risk_packet = await bea_engine.record_telemetry(bea_key, "SIDE_OR_UP")
             risk_packet["critical_pending"] = decision["count"]
@@ -476,7 +439,7 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
 
 
 # ---------------------------------------------------------------------------
-# /api/v1/scan-objects — fast prop sweep, decoupled from the 5s telemetry loop
+# /api/v1/scan-objects — fast prop sweep, decoupled from the telemetry loop
 # ---------------------------------------------------------------------------
 class ObjectScanPayload(BaseModel):
     candidate_id: str
@@ -510,17 +473,28 @@ _prop_seen: dict[str, bool] = {}
 # empty frame before the same phone can open a second violation.
 PROP_CLEAR_SWEEPS = int(os.getenv("BEA_PROP_CLEAR_SWEEPS", "3"))
 _prop_clear_streak: dict[str, int] = {}
+_phone_lower_streak: dict[str, int] = {}
+
+
+def _detect_objects(results, names: dict, min_conf: float = 0.0) -> list[str]:
+    """Return normalized labels from one or more YOLO result batches."""
+    detected = []
+    for result in results:
+        for box in result.boxes:
+            confidence = float(box.conf[0])
+            if confidence < min_conf:
+                continue
+            label = names[int(box.cls[0])]
+            detected.append(f"{label} ({confidence:.0%})")
+    return detected
 
 
 @app.post("/api/v1/scan-objects")
 async def scan_objects(payload: ObjectScanPayload, background_tasks: BackgroundTasks):
     """YOLO-only sweep that runs several times faster than the telemetry loop.
 
-    Why this is a separate endpoint instead of just lowering the analyze-frame
-    interval: `timeline.DASHBOARD_CADENCE_SEC` hardcodes "1 frame = 5 seconds of
-    session time", so every duration on the dashboard (speaking time, longest
-    focus streak) is derived from the frame COUNT. Sampling analyze-frame faster
-    would silently inflate all of them by the same ratio.
+    This remains separate because object detection has a different cadence and
+    rising-edge contract from full telemetry. It writes no timeline frames.
 
     So this path writes NO timeline_frames. It answers one question — is a prop
     visible right now — and escalates on the rising edge if so.
@@ -540,22 +514,44 @@ async def scan_objects(payload: ObjectScanPayload, background_tasks: BackgroundT
         raise HTTPException(status_code=400, detail="Invalid image payload.")
 
     loop = asyncio.get_running_loop()
-    results = await loop.run_in_executor(
+    # An enlarged centre/lower crop targets the place a candidate most
+    # often holds a phone. Cropping makes a small device occupy more of YOLO's
+    # fixed inference canvas. It only searches the phone class and requires two
+    # consecutive sweeps, preserving the stricter full-frame evidence rule.
+    height, width = image.shape[:2]
+    crop_top = height // 3
+    tile_width = (width * 5) // 8
+    lower_left = image[crop_top:height, 0:tile_width]
+    lower_right = image[crop_top:height, width - tile_width:width]
+    batched_results = await loop.run_in_executor(
         app.state.prop_executor,
         lambda: yolo_model_prop(
-            image, verbose=False, classes=YOLO_PROP_CLASSES,
-            imgsz=640, augment=False, conf=YOLO_CONF,
+            [image, lower_left, lower_right],
+            verbose=False,
+            classes=YOLO_PROP_CLASSES,
+            imgsz=640,
+            augment=False,
+            conf=PHONE_LOWER_CONF,
         ),
     )
-
-    detected_objects = []
-    for r in results:
-        for box in r.boxes:
-            label = yolo_model_prop.names[int(box.cls[0])]
-            detected_objects.append(f"{label} ({float(box.conf[0]):.0%})")
+    full_results = batched_results[:1]
+    lower_results = batched_results[1:3]
+    detected_objects = _detect_objects(
+        full_results, yolo_model_prop.names, min_conf=YOLO_CONF
+    )
+    lower_phone_detected = any(
+        "cell phone" in label.lower()
+        for label in _detect_objects(
+            lower_results, yolo_model_prop.names, min_conf=PHONE_LOWER_CONF
+        )
+    )
+    lower_streak = _phone_lower_streak.get(bea_key, 0)
+    _phone_lower_streak[bea_key] = lower_streak + 1 if lower_phone_detected else 0
 
     if any("cell phone" in o.lower() for o in detected_objects):
         verdict = "CRITICAL: Mobile device detected in frame."
+    elif _phone_lower_streak[bea_key] >= PHONE_LOWER_CONFIRMATIONS:
+        verdict = "CRITICAL: Mobile device detected in lower camera field."
     elif any("book" in o.lower() or "laptop" in o.lower() for o in detected_objects):
         verdict = "CRITICAL: Prohibited item detected on desk."
     else:
@@ -576,10 +572,8 @@ async def scan_objects(payload: ObjectScanPayload, background_tasks: BackgroundT
     # Nothing there, or the same prop we already flagged — stop here.
     #
     # Deliberately NOT calling record_critical_signal(False) on the clear path:
-    # that resets the 3-of-5 buffer the main loop builds for transient signals
-    # (face lost / extra face). This loop runs ~4x more often, so clearing from
-    # here would wipe the debounce before it could ever fill, and those flags
-    # would stop firing entirely. The 5s loop owns that buffer; this one only
+    # that resets confirmation state owned by the telemetry loop. Clearing from
+    # here could wipe a face-event streak before it fills; this loop only
     # ever adds an instant object critical.
     if verdict is None or was_seen:
         return {
@@ -1089,6 +1083,7 @@ async def reset_session(candidate_id: str):
     # never re-flag for the rest of the run.
     _prop_seen.pop(candidate_id, None)
     _prop_clear_streak.pop(candidate_id, None)
+    _phone_lower_streak.pop(candidate_id, None)
     return {"status": "success", "message": "Memory cleared."}
 
 

@@ -9,9 +9,9 @@ DB_PATH = os.getenv(
     os.path.join(os.path.dirname(__file__), "..", "guard_telemetry.db")
 )
 
-# Inference cadence used to convert a "frame count" into "seconds of practice".
-# The edge loop samples ~every 5s, so 1 frame ≈ 5 seconds of session time.
-DASHBOARD_CADENCE_SEC = 5
+# Kept for callers that import the historical constant. Duration metrics below
+# use frame timestamps so sampling cadence cannot inflate reported practice time.
+DASHBOARD_CADENCE_SEC = 1
 
 
 def _db() -> sqlite3.Connection:
@@ -163,8 +163,6 @@ def get_dashboard_summary(candidate_id: str | None = None, days: int = 84) -> di
     user with zero sessions (readiness is null in that case, never a 404).
     """
     cutoff = time.time() - days * 86400
-    cadence = DASHBOARD_CADENCE_SEC
-
     where = "t >= ?"
     params: list = [cutoff]
     if candidate_id:
@@ -236,9 +234,10 @@ def get_dashboard_summary(candidate_id: str | None = None, days: int = 84) -> di
                 "side": 0,
                 "down": 0,
                 "talking": 0,
-                # streak tracking
-                "_cur_streak": 0,
-                "max_streak_frames": 0,
+                # streak tracking uses timestamps, not frame count
+                "_straight_started_at": None,
+                "_last_straight_at": None,
+                "max_streak_s": 0.0,
                 # recovery tracking (dip < 50 then climb back >= 70)
                 "_dipped": False,
                 "recoveries": 0,
@@ -252,10 +251,15 @@ def get_dashboard_summary(candidate_id: str | None = None, days: int = 84) -> di
         gaze = f["gaze"] or ""
         if gaze == "STRAIGHT":
             s["straight"] += 1
-            s["_cur_streak"] += 1
-            s["max_streak_frames"] = max(s["max_streak_frames"], s["_cur_streak"])
+            if s["_straight_started_at"] is None:
+                s["_straight_started_at"] = f["t"]
+            s["_last_straight_at"] = f["t"]
+            s["max_streak_s"] = max(
+                s["max_streak_s"], f["t"] - s["_straight_started_at"]
+            )
         else:
-            s["_cur_streak"] = 0
+            s["_straight_started_at"] = None
+            s["_last_straight_at"] = None
             if gaze == "SIDE_OR_UP":
                 s["side"] += 1
             elif gaze == "DOWN":
@@ -288,7 +292,7 @@ def get_dashboard_summary(candidate_id: str | None = None, days: int = 84) -> di
         fc = s["frames"]
         eye = _pct(s["straight"], fc)
         talk = _pct(s["talking"], fc)
-        streak_s = s["max_streak_frames"] * cadence
+        streak_s = round(s["max_streak_s"], 1)
         avg_comp = round(s["comp_sum"] / fc, 1) if fc else 0.0
         computed.append({
             "session_id": s["session_id"],
@@ -518,15 +522,15 @@ def get_timeline(session_id: str) -> dict:
     straight = sum(1 for r in rows if (r["gaze"] or "").upper() == "STRAIGHT")
     talking = sum(1 for r in rows if r["is_talking"])
 
-    # Longest unbroken run of STRAIGHT frames, converted to seconds at the
-    # sampling cadence — same definition the dashboard's focus streak uses.
-    best_run = run = 0
+    # Use actual timestamps so faster sampling does not inflate the streak.
+    best_run_s = run_started_at = None
     for r in rows:
         if (r["gaze"] or "").upper() == "STRAIGHT":
-            run += 1
-            best_run = max(best_run, run)
+            if run_started_at is None:
+                run_started_at = r["t"]
+            best_run_s = max(best_run_s or 0.0, r["t"] - run_started_at)
         else:
-            run = 0
+            run_started_at = None
 
     def _pct(part: int, whole: int) -> float:
         return round((part / whole) * 100, 1) if whole else 0.0
@@ -552,9 +556,8 @@ def get_timeline(session_id: str) -> dict:
         "stats": {
             "eye_contact_pct": eye_contact_pct,
             "talking_pct": talking_pct,
-            "longest_focus_streak_s": best_run * DASHBOARD_CADENCE_SEC,
+            "longest_focus_streak_s": round(best_run_s or 0.0, 1),
         },
         "frames": frames,
         "moments": moments,
     }
-

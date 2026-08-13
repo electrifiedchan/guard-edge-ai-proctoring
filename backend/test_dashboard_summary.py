@@ -108,10 +108,24 @@ def test_multi_session_trend_and_streak():
     print("PASS multi_session", out["totals"])
 
 
+def test_focus_streak_uses_timestamps_not_frame_count():
+    _fresh_db()
+    now = time.time()
+    _seed_session("c_01", now - 60, ["STRAIGHT"] * 5, [80] * 5)
+    out = tl.get_dashboard_summary(candidate_id="c_01", days=84)
+    focus = next(m for m in out["metrics"] if m["key"] == "longest_focus_streak_s")
+    assert focus["value"] == 20.0, focus
+
+    timeline = tl.get_timeline("c_01")
+    assert timeline["stats"]["longest_focus_streak_s"] == 20.0, timeline["stats"]
+    print("PASS timestamp_focus_streak")
+
+
 if __name__ == "__main__":
     test_empty_db_returns_valid_shape()
     test_one_session_returns_non_null_aggregates()
     test_multi_session_trend_and_streak()
+    test_focus_streak_uses_timestamps_not_frame_count()
     if os.path.exists(_TMP_DB):
         os.remove(_TMP_DB)
     print("\nALL DASHBOARD TESTS PASSED")
