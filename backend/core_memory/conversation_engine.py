@@ -453,7 +453,7 @@ class ConversationEngine:
 
         focus_label = "Excellent" if avg_focus >= 80 else "Moderate" if avg_focus >= 50 else "Needs Improvement"
 
-        prompt = f"""You are an empathetic executive interview coach reviewing a mock interview session.
+        prompt = f"""You are a direct, evidence-based interview coach reviewing a mock interview session.
 
 The candidate's resume summary:
 {session.resume_text[:2000]}
@@ -465,29 +465,50 @@ Focus/Composure Score: {avg_focus:.0f}/100 ({focus_label})
 Total turns: {session.current_turn}
 Scaffolding was needed: {"Yes" if any(t for t in session.conversation_history if session.scaffolding_level > 0) else "No"}
 
-Write a coaching report in exactly 4 short paragraphs:
-1. Overall impression — what went well, the candidate's strongest moments
-2. Growth area — the weakest answer, with specific actionable advice on how to improve it
-3. Communication style — note patterns (filler words, structure, confidence) with tips
-4. Composure & focus — comment on their attention/presence based on the focus score, and end with genuine encouragement
+Return ONLY valid JSON with this exact shape:
+{{
+  "verdict": "one conclusion-first sentence, max 18 words",
+  "strengths": ["specific transcript-grounded strength", "specific strength"],
+  "primary_improvement": "one highest-impact improvement, max 30 words",
+  "next_actions": ["specific action", "specific action"],
+  "readiness": "Strong|Developing|Needs targeted practice"
+}}
 
-Write in 2nd person ("You did well when..."). Be warm but honest. No bullet points, no headers — just flowing paragraphs."""
+Rules:
+- Keep the complete output under 130 words.
+- Give 1-3 strengths and exactly 2-3 next actions.
+- Address the candidate as "you".
+- Every claim must be grounded in the transcript or focus score.
+- Do not mention filler words, tone, confidence, or body language unless the supplied data directly demonstrates it.
+- Do not repeat praise or add a closing encouragement paragraph.
+- No markdown, headings, or text outside the JSON object."""
 
         try:
             t_start = time.time()
-            report = await self._complete(
+            raw_report = await self._complete(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
                 max_tokens=VERDICT_MAX_TOKENS,
                 timeout=VERDICT_TIMEOUT_SEC,
             )
-            if report is None:
+            if raw_report is None:
                 raise RuntimeError("all LLM backends unavailable")
+            coaching = llm_config.normalize_coaching(llm_config.extract_json(raw_report))
+            report = coaching.get("verdict", "Interview feedback is ready.")
             logger.info(f"📋 Report generated in {time.time() - t_start:.1f}s")
         except Exception as e:
             logger.error(f"Verdict generation failed: {e}", exc_info=True)
-
-            report = "We encountered an issue generating your detailed feedback. Based on the interview, you showed solid engagement. Keep practicing with the STAR method to strengthen your responses."
+            coaching = {
+                "verdict": "Your interview showed useful foundations with room for more specific evidence.",
+                "strengths": ["You completed the interview with steady engagement."],
+                "primary_improvement": "Support each answer with a concrete situation, decision, and measurable result.",
+                "next_actions": [
+                    "Prepare two project examples using the STAR structure.",
+                    "State the result of each decision in one sentence.",
+                ],
+                "readiness": "Developing",
+            }
+            report = coaching["verdict"]
 
         # Keep the session alive — deleting it here created a race: if
         # handleSpeechEnd fires one more VAD callback after the verdict
@@ -497,6 +518,7 @@ Write in 2nd person ("You did well when..."). Be warm but honest. No bullet poin
         # session can safely stay until the engine restarts.
         return {
             "report": report,
+            "coaching": coaching,
             "focus_score": round(avg_focus, 1),
             "focus_label": focus_label,
             "turns_completed": session.current_turn,

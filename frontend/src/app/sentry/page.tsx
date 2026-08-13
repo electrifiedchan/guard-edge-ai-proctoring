@@ -364,6 +364,7 @@ export default function SentryPage() {
         "guard_report",
         JSON.stringify({
           report: data.report,
+          coaching: data.coaching,
           // Source field is `focus_score`; the sessionStorage key stays
           // `average_focus_score` because /report reads that. Reading the
           // storage-side name off the response gave undefined, and `|| 0`

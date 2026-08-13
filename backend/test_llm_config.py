@@ -199,6 +199,26 @@ for label, raw, want in cases:
 # through that check and reach the UI as a single broken question.
 check("truncated json", llm_config.extract_json('[{"question": "a"'), None)
 
+compact = llm_config.normalize_coaching({
+    "verdict": "  Strong foundation. ",
+    "strengths": [" Clear examples ", "Specific tradeoff", "Extra item", "Ignored"],
+    "primary_improvement": " Add measurable outcomes ",
+    "next_actions": ["Use STAR", "Name the result", "Practice once", "Ignored"],
+    "readiness": "Strong",
+})
+check("coaching object is normalized", compact, {
+    "verdict": "Strong foundation.",
+    "strengths": ["Clear examples", "Specific tradeoff", "Extra item"],
+    "primary_improvement": "Add measurable outcomes",
+    "next_actions": ["Use STAR", "Name the result", "Practice once"],
+    "readiness": "Strong",
+})
+
+fallback = llm_config.normalize_coaching(None)
+check("invalid coaching uses stable fallback", set(fallback), {
+    "verdict", "strengths", "primary_improvement", "next_actions", "readiness",
+})
+
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

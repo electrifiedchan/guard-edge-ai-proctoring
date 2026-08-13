@@ -408,3 +408,50 @@ def extract_json(raw: str):
 
     logger.warning(f"Could not parse JSON from model reply: {raw[:160]!r}")
     return None
+
+
+def normalize_coaching(value) -> dict:
+    """Clamp an LLM coaching object to the report UI's stable contract."""
+    if not isinstance(value, dict):
+        value = {}
+
+    def text(key: str, fallback: str, max_chars: int) -> str:
+        raw = value.get(key)
+        clean = " ".join(str(raw).split()) if raw is not None else ""
+        return (clean or fallback)[:max_chars]
+
+    def items(key: str, fallback: list[str], limit: int) -> list[str]:
+        raw = value.get(key)
+        if not isinstance(raw, list):
+            raw = fallback
+        clean = [" ".join(str(item).split())[:180] for item in raw if str(item).strip()]
+        return (clean or fallback)[:limit]
+
+    readiness = text("readiness", "Developing", 40)
+    if readiness not in {"Strong", "Developing", "Needs targeted practice"}:
+        readiness = "Developing"
+
+    return {
+        "verdict": text(
+            "verdict",
+            "Your interview showed useful foundations with room for more specific evidence.",
+            180,
+        ),
+        "strengths": items(
+            "strengths", ["You completed the interview with steady engagement."], 3
+        ),
+        "primary_improvement": text(
+            "primary_improvement",
+            "Support each answer with a concrete situation, decision, and measurable result.",
+            240,
+        ),
+        "next_actions": items(
+            "next_actions",
+            [
+                "Prepare two project examples using the STAR structure.",
+                "State the result of each decision in one sentence.",
+            ],
+            3,
+        ),
+        "readiness": readiness,
+    }

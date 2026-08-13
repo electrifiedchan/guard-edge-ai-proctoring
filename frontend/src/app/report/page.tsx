@@ -15,6 +15,13 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8080"
 
 interface ReportData {
   report: string;
+  coaching?: {
+    verdict: string;
+    strengths: string[];
+    primary_improvement: string;
+    next_actions: string[];
+    readiness: string;
+  };
   average_focus_score: number;
   turns_completed: number;
 }
@@ -168,18 +175,60 @@ export default function ReportPage() {
           <DriftTimeline frames={frames} moments={moments} />
         )}
 
-        {/* AI Report */}
-        <div className="lift-1 rounded-lg p-6">
-          <span className="eyebrow mb-4 flex items-center gap-2">
+        {/* Coaching brief */}
+        <section className="border-y border-[var(--color-hairline)] py-6">
+          <span className="eyebrow mb-5 flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-signal)]" />
             AI Coach Feedback
           </span>
-          <div className="prose prose-invert prose-sm max-w-none">
-            <p className="text-[13px] leading-relaxed text-[var(--color-parchment)] whitespace-pre-wrap font-mono">
+          {data.coaching ? (
+            <div className="flex flex-col gap-6">
+              <div>
+                <span className="eyebrow text-[10px]">Verdict · {data.coaching.readiness}</span>
+                <p className="mt-2 text-[20px] font-display font-semibold leading-snug text-[var(--color-snow)]">
+                  {data.coaching.verdict}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
+                <div>
+                  <h2 className="text-[13px] font-semibold text-[var(--color-snow)]">What worked</h2>
+                  <ul className="mt-2.5 space-y-2">
+                    {data.coaching.strengths.slice(0, 3).map((strength) => (
+                      <li key={strength} className="flex gap-2 text-[13px] leading-relaxed text-[var(--color-parchment)]">
+                        <span className="mt-2 h-1 w-1 rounded-full bg-[var(--color-signal)] shrink-0" />
+                        <span>{strength}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div>
+                  <h2 className="text-[13px] font-semibold text-[var(--color-snow)]">Priority fix</h2>
+                  <p className="mt-2.5 text-[13px] leading-relaxed text-[var(--color-parchment)]">
+                    {data.coaching.primary_improvement}
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                <h2 className="text-[13px] font-semibold text-[var(--color-snow)]">Next attempt</h2>
+                <ol className="mt-2.5 grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {data.coaching.next_actions.slice(0, 3).map((action, index) => (
+                    <li key={action} className="flex gap-3 border-t border-[var(--color-hairline)] pt-3 text-[13px] leading-relaxed text-[var(--color-parchment)]">
+                      <span className="font-mono text-[11px] text-[var(--color-signal)]">0{index + 1}</span>
+                      <span>{action}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </div>
+          ) : (
+            <p className="text-[13px] leading-relaxed text-[var(--color-parchment)] whitespace-pre-wrap">
               {data.report}
             </p>
-          </div>
-        </div>
+          )}
+        </section>
 
         {/* Progress hand-off — one session is a data point, the dashboard is
             the trend. This was the missing exit from the flow: the report was

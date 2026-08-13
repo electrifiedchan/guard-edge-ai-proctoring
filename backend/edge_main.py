@@ -1221,7 +1221,7 @@ async def generate_verdict(payload: VerdictRequest):
         else "Poor"
     )
 
-    prompt = f"""You are a strict but empathetic executive interview coach. A candidate just completed a practice interview. Evaluate their performance and provide actionable coaching feedback.
+    prompt = f"""You are a direct, evidence-based interview coach. A candidate just completed a practice interview.
 
 INTERVIEW DATA:
 {qa_block}
@@ -1229,15 +1229,18 @@ INTERVIEW DATA:
 FOCUS/COMPOSURE SCORE: {payload.average_focus_score:.0f}/100 ({focus_label})
 (This score measures eye contact, head stability, and engagement via computer vision during the interview.)
 
-INSTRUCTIONS:
-- Write exactly 3 paragraphs of coaching feedback.
-- Paragraph 1: Overall impression — were the answers structured (STAR method), specific, and compelling?
-- Paragraph 2: Identify the weakest answer and explain specifically how to improve it.
-- Paragraph 3: Comment on their composure/focus score and body language. If high, praise discipline. If low, give concrete tips for camera presence.
-- Be direct. No fluff. Use "you" to address the candidate.
-- End with one punchy sentence summarizing their readiness level.
+Return ONLY valid JSON with this exact shape:
+{{
+  "verdict": "one conclusion-first sentence, max 18 words",
+  "strengths": ["specific evidence-based strength"],
+  "primary_improvement": "one highest-impact improvement, max 30 words",
+  "next_actions": ["specific action", "specific action"],
+  "readiness": "Strong|Developing|Needs targeted practice"
+}}
 
-Return ONLY the coaching text. No JSON, no markdown headers, no pleasantries."""
+Keep the complete output under 130 words. Use 1-3 strengths and 2-3 actions.
+Use only the answers and focus score provided. Do not invent filler words,
+confidence, tone, or body-language observations. No markdown or extra prose."""
 
     try:
         client = llm_config.make_client()
@@ -1249,12 +1252,15 @@ Return ONLY the coaching text. No JSON, no markdown headers, no pleasantries."""
             max_tokens=800,
         )
 
-        report = completion.choices[0].message.content.strip()
+        raw_report = completion.choices[0].message.content.strip()
+        coaching = llm_config.normalize_coaching(llm_config.extract_json(raw_report))
+        report = coaching.get("verdict", "Interview feedback is ready.")
         logger.info(f"📋 Verdict generated: {len(report)} chars")
 
         return {
             "status": "success",
             "report": report,
+            "coaching": coaching,
             "focus_score": payload.average_focus_score,
             "focus_label": focus_label,
         }
