@@ -6,7 +6,7 @@ import { activeCandidateId } from "@/lib/resumeMemory";
 import PersonaPicker from "@/components/PersonaPicker";
 import { DEFAULT_PERSONA, type PersonaId } from "@/lib/personas";
 
-const TELEMETRY_INTERVAL_MS = 1000;
+const TELEMETRY_INTERVAL_MS = 2000;
 
 export interface RiskPacket {
   candidate_id: string;
@@ -117,7 +117,7 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
     // Pose agreed across consecutive rAF frames. Written alongside head_pose so
     // the two can never disagree; without it, a single blink-misfire frame from
     // the 30fps gatekeeper was stamped onto the whole inference window as the
-    // frame verdict. Telemetry now samples once per second.
+    // frame verdict. Telemetry now samples every two seconds.
     stable_pose: "HEAD_CENTER" as string | null,
   });
   const gatekeeperRef = useRef<{ camera: any; faceMesh: any } | null>(null);
@@ -1322,7 +1322,7 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
 
           {sysStatus === "ACTIVE" && (
             <span className="px-2.5 py-1 rounded-md text-[11px] font-medium uppercase backdrop-blur-md border bg-[var(--color-surface)]/70 border-[var(--color-hairline)] text-[var(--color-slate)]">
-              1s composure · 1.2s objects
+              2s composure · 1.2s objects
             </span>
 
           )}
