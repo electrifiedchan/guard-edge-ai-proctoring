@@ -14,6 +14,22 @@ export interface FrameFlag {
   critical: boolean;
 }
 
+/**
+ * A one-shot instruction to say something to the candidate, mid-session.
+ *
+ * Present on a response only for the frame a confirmed phone or second person
+ * FIRST appears — the backend fires on the rising edge, so this is null on every
+ * subsequent frame the same prop stays in view. It is therefore not state to
+ * render; act on it once and drop it.
+ */
+export interface ScopeInterrupt {
+  kind: "MOBILE_DEVICE" | "MULTIPLE_FACES";
+  /** The exact sentence to speak. Wording rotates per sighting, backend-side. */
+  say: string;
+  /** 1-based count of times this session has been told about this kind. */
+  occurrence: number;
+}
+
 export interface RiskPacket {
   candidate_id: string;
   risk_score: number;
@@ -41,10 +57,19 @@ interface SniperScopeProps {
    * escalation is the engine's call — so the picker locks while scanning.
    */
   onPersonaChange?: (id: PersonaId) => void;
+  /**
+   * A confirmed phone or second person, to be said out loud to the candidate.
+   *
+   * Raised to the page rather than spoken here because the page owns the only
+   * `speechSynthesis` in the app: its `speakText` calls `cancel()` first, so a
+   * second speaker in this component would cut the interviewer off mid-question
+   * and vice versa. One owner, one queue.
+   */
+  onInterrupt?: (interrupt: ScopeInterrupt) => void;
   ref?: Ref<SniperScopeHandle>;
 }
 
-export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaChange, ref }: SniperScopeProps) {
+export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaChange, onInterrupt, ref }: SniperScopeProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -214,6 +239,13 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
   useEffect(() => {
     onTelemetryUpdateRef.current = onTelemetryUpdate;
   }, [onTelemetryUpdate]);
+
+  // Same reason, same shape: read through a ref inside the loop so a new
+  // callback identity on the parent cannot re-create the inference chain.
+  const onInterruptRef = useRef(onInterrupt);
+  useEffect(() => {
+    onInterruptRef.current = onInterrupt;
+  }, [onInterrupt]);
 
   // Single-flight guard so duplicate scheduling sources can't start a second chain.
   const loopRunningRef = useRef(false);
@@ -1099,6 +1131,11 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
           // Pass data up via stable ref — never re-binds the loop.
           onTelemetryUpdateRef.current(data.risk_packet, data.verdict);
         }
+
+        // Outside the risk_packet guard on purpose. An interruption is the one
+        // thing here that must not be lost to a malformed packet — it is the only
+        // moment the candidate can still act on the finding.
+        if (data.interrupt) onInterruptRef.current?.(data.interrupt);
       } catch (error) {
         console.log("Backend unreachable:", (error as Error).message);
         setLatestVerdict("⚠️ ERROR: BACKEND CONNECTION FAILED. CHECK IF EDGE_MAIN.PY IS RUNNING.");
@@ -1206,6 +1243,13 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
             setFlags([]);
             onTelemetryUpdateRef.current(data.risk_packet, data.verdict);
           }
+
+          // Outside the `escalated` guard for the same reason as above: the
+          // backend only sets this on a confirmed rising edge, so it is already
+          // gated where the gating belongs. Re-gating it here on a different
+          // condition would risk swallowing the one thing the candidate needs to
+          // hear while they can still do something about it.
+          if (data.interrupt) onInterruptRef.current?.(data.interrupt);
         } catch {
           // Stay silent — the telemetry loop already surfaces backend-down.
           // Two error banners fighting over the same panel helps nobody.

@@ -3,8 +3,8 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { User, Bot } from "lucide-react";
-import SniperScope, { RiskPacket, SniperScopeHandle } from "@/components/SniperScope";
+import { Smartphone, User, Users, Bot } from "lucide-react";
+import SniperScope, { RiskPacket, ScopeInterrupt, SniperScopeHandle } from "@/components/SniperScope";
 import { PERSONA_LABELS, DEFAULT_PERSONA, type PersonaId } from "@/lib/personas";
 import VoiceOrb, { VoiceState } from "@/components/VoiceOrb";
 import LoadingOverlay from "@/components/LoadingOverlay";
@@ -22,6 +22,15 @@ type ChatMessage = {
 type TurnState = "ai-speaking" | "listening" | "processing" | "idle";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8080";
+
+// How long a reminder deferred by a question stays worth saying. Past this, the
+// moment has passed and the report is the right place for it — see the drain
+// effect for why this is a proxy rather than a real liveness check.
+const NUDGE_TTL_MS = 15_000;
+
+// How long the banner stays up. Long enough to read after looking back at the
+// screen, short enough not to sit over the video for the rest of the run.
+const NUDGE_BANNER_MS = 9_000;
 
 export default function SentryPage() {
   const router = useRouter();
@@ -41,6 +50,21 @@ export default function SentryPage() {
   const [currentPersona, setCurrentPersona] = useState<string>(DEFAULT_PERSONA);
   const [startingPersona, setStartingPersona] = useState<PersonaId>(DEFAULT_PERSONA);
   const [turnState, setTurnState] = useState<TurnState>("idle");
+  // Mirror of turnState for the interrupt path, which is called from a ref-bound
+  // callback and so would otherwise read render 1's value forever.
+  const turnStateRef = useRef<TurnState>("idle");
+  turnStateRef.current = turnState;
+
+  /**
+   * The coaching reminder currently on screen, if any. Rendered as a banner over
+   * the scope AND spoken, because both findings mean the candidate is probably
+   * not looking at the screen — a silent banner would be missed at exactly the
+   * moment it matters.
+   */
+  const [coachNudge, setCoachNudge] = useState<ScopeInterrupt | null>(null);
+  // A reminder that arrived mid-question and is waiting for a gap to speak in.
+  const pendingNudgeRef = useRef<{ nudge: ScopeInterrupt; at: number } | null>(null);
+  const nudgeSpeakingRef = useRef(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [error, setError] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
@@ -140,6 +164,114 @@ export default function SentryPage() {
     });
   }, []);
 
+  /**
+   * Say a coaching reminder out loud, mid-session.
+   *
+   * The whole point of this feature is that observing silently and explaining
+   * afterwards tells the candidate what cost them the session only once it is too
+   * late to stop doing it. But it has to be delivered without damaging the
+   * interview itself, and there are two ways it could:
+   *
+   * 1. speakText() calls speechSynthesis.cancel() first, so speaking over a
+   *    question would truncate it — and the candidate cannot answer something
+   *    they never heard. So this defers unless the floor is genuinely free.
+   * 2. During `listening` the microphone is LIVE. Speaking into it would have the
+   *    VAD record our own reminder and post it to /voice/transcribe as the
+   *    candidate's answer. So the mic is closed for the duration and reopened
+   *    afterwards.
+   *
+   * `processing` counts as busy for the same reason as `ai-speaking`: the
+   * interviewer's reply is already on its way back and will cancel() us mid-word
+   * the moment it lands.
+   */
+  const speakNudge = useCallback(async (nudge: ScopeInterrupt) => {
+    if (sessionEndingRef.current || nudgeSpeakingRef.current) return;
+
+    nudgeSpeakingRef.current = true;
+    // Fresh object on purpose. A deferred reminder already put the banner up, and
+    // its auto-clear timer has been running through the wait — re-setting the same
+    // reference would be a no-op to React and leave the banner about to vanish
+    // just as the audio starts. A new identity restarts the timer here, at the
+    // moment the candidate actually hears it.
+    setCoachNudge({ ...nudge });
+
+    // Close the mic first if it is open, so the reminder cannot be transcribed as
+    // an answer. Reopened below only if the run is still going.
+    const micWasLive = turnStateRef.current === "listening";
+    if (micWasLive) stopListening();
+
+    try {
+      await speakText(nudge.say);
+    } finally {
+      nudgeSpeakingRef.current = false;
+      if (micWasLive && !sessionEndingRef.current) {
+        setLiveTranscript("MICROPHONE LIVE. LISTENING…");
+        startListening();
+      }
+    }
+  }, [speakText, startListening, stopListening]);
+
+  /**
+   * A confirmed phone or second person, from either detection path.
+   *
+   * The backend fires once per sighting, so no de-duplication is needed here —
+   * this is called on a rising edge, not every frame.
+   */
+  const handleInterrupt = useCallback((nudge: ScopeInterrupt) => {
+    if (sessionEndingRef.current) return;
+
+    const busy =
+      nudgeSpeakingRef.current ||
+      turnStateRef.current === "ai-speaking" ||
+      turnStateRef.current === "processing";
+
+    if (busy) {
+      // One slot, newest wins. If a phone and a second person both land during a
+      // question, only the later one is spoken: two reminders back to back is
+      // ~20 seconds of talking over a live interview, which is the opposite of a
+      // gentle nudge. The dropped one is still in the report, and a candidate
+      // being told about one of the two will look at the screen anyway — where
+      // the banner is.
+      pendingNudgeRef.current = { nudge, at: Date.now() };
+      // Banner goes up immediately even though the audio waits: the finding is
+      // true now, and a candidate who happens to glance up should see it.
+      setCoachNudge(nudge);
+      return;
+    }
+
+    void speakNudge(nudge);
+  }, [speakNudge]);
+
+  // Drain the queue once the floor is free.
+  //
+  // NUDGE_TTL_MS is a staleness proxy, not a liveness check: the backend reports
+  // the rising edge and there is no "the phone is gone" signal to wait for. A
+  // reminder that has been queued through a whole answer is about a moment the
+  // candidate has very likely already moved on from, and telling someone to put
+  // away a phone they have already put away makes the system look like it is not
+  // watching — the exact impression this feature exists to correct. Better to say
+  // nothing; the moment is still in the report either way.
+  useEffect(() => {
+    if (turnState === "ai-speaking" || turnState === "processing") return;
+    const queued = pendingNudgeRef.current;
+    if (!queued) return;
+
+    pendingNudgeRef.current = null;
+    if (Date.now() - queued.at > NUDGE_TTL_MS) {
+      setCoachNudge(null);
+      return;
+    }
+    void speakNudge(queued.nudge);
+  }, [turnState, speakNudge]);
+
+  // Clear the banner a few seconds after the voice stops, so it does not sit over
+  // the video for the rest of the run.
+  useEffect(() => {
+    if (!coachNudge) return;
+    const t = setTimeout(() => setCoachNudge(null), NUDGE_BANNER_MS);
+    return () => clearTimeout(t);
+  }, [coachNudge]);
+
   // When user clicks "Disengage" in SniperScope — stop everything
   const handleDisengage = useCallback(() => {
     // Latch before tearing anything down, so a turn mid-flight sees the run is
@@ -147,6 +279,9 @@ export default function SentryPage() {
     // what is already queued; the reply still on its way back from the backend
     // would arrive afterwards and start speaking again.
     sessionEndingRef.current = true;
+    // A queued reminder must not survive the run it belonged to.
+    pendingNudgeRef.current = null;
+    setCoachNudge(null);
     stopListening();
     window.speechSynthesis?.cancel();
     // cancel() is not guaranteed to fire onend, which would strand the
@@ -442,13 +577,40 @@ export default function SentryPage() {
       {/* Dashboard grid */}
       <div className="w-full max-w-[1400px] flex flex-col xl:flex-row gap-4 flex-1 min-h-0">
         {/* Vision Sentry (left) */}
-        <div className="flex-1 min-h-0 min-w-0">
+        <div className="relative flex-1 min-h-0 min-w-0">
           <SniperScope
             ref={sniperRef}
             onTelemetryUpdate={handleTelemetry}
             onDisengage={handleDisengage}
             onPersonaChange={setStartingPersona}
+            onInterrupt={handleInterrupt}
           />
+
+          {/* Coaching reminder. Amber, not red: this is a nudge about how the
+              moment reads to an interviewer, not an accusation — the palette
+              should not say "caught" when the copy deliberately does not. */}
+          <AnimatePresence>
+            {coachNudge && (
+              <motion.div
+                initial={{ opacity: 0, y: -12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -12 }}
+                transition={{ duration: 0.25 }}
+                className="absolute top-4 left-4 right-4 z-30 flex items-start gap-3
+                           rounded-lg border border-amber-400/40 bg-amber-950/85
+                           px-4 py-3 backdrop-blur-sm"
+                role="status"
+                aria-live="polite"
+              >
+                {coachNudge.kind === "MOBILE_DEVICE" ? (
+                  <Smartphone className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-300" />
+                ) : (
+                  <Users className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-300" />
+                )}
+                <p className="text-sm leading-snug text-amber-50">{coachNudge.say}</p>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Right sidebar — VoiceOrb + Transcript/Chat */}

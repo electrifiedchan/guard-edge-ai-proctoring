@@ -32,6 +32,7 @@ from core_memory.timeline import (
     get_dashboard_summary,
 )
 from core_memory.episodes import EpisodeTracker
+from core_memory.interrupts import InterruptDirector
 from core_memory.voice_engine import transcribe_audio as whisper_transcribe
 import voice_engine
 import tempfile
@@ -378,6 +379,19 @@ class FramePayload(BaseModel):
 episode_tracker = EpisodeTracker()
 
 
+# Decides when to speak up mid-session, and picks the words. Same in-memory
+# rationale as episode_tracker: rotation and cooldown state only mean anything
+# while a session is streaming.
+#
+# The audio is NOT played here. voice_engine.speak() is pyttsx3 calling
+# engine.runAndWait(), which blocks — inside these handlers it would stall an
+# endpoint that runs every 1.2 s — and it plays on whatever machine hosts the
+# backend, which on any non-local deploy is not the candidate. So this emits an
+# "interrupt" object in the response and the browser speaks it through the
+# speechSynthesis path /sentry already owns.
+interrupt_director = InterruptDirector()
+
+
 # ---------------------------------------------------------------------------
 # /api/v1/analyze-frame  — MR 1 ingestion rewired to timeline_frames
 # ---------------------------------------------------------------------------
@@ -431,6 +445,7 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
     # --- PHASE 4: BEA temporal graph ---
     # Objects are owned by the prop sweep and flag on the rising edge. This path
     # handles face, speech, and pose signals without waiting on object inference.
+    interrupt: dict | None = None
     if is_critical and critical_kind == "object" and _prop_seen.get(bea_key, False):
         # Prop already flagged by the fast sweep — skip escalation so we don't
         # bill it twice, but still write the frame so the verdict page has the
@@ -459,6 +474,19 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
                 if decision.get("instant")
                 else f"CONFIRMED ({decision['count']}/{decision['threshold']}): {consolidated}"
             )
+            # Speak up, but only here — this branch is the rising edge of a
+            # CONFIRMED incident, which is the first moment the system is
+            # entitled to assert the finding out loud. The `active_confirmed`
+            # branch below is the same incident continuing, so interrupting from
+            # there would repeat the reminder every 2 s for as long as the second
+            # person stayed in shot.
+            #
+            # Objects are excluded deliberately: they are confirmed on the prop
+            # sweep, which owns their interruption. Reaching this branch with an
+            # object means the sweep had not yet latched it, and having both
+            # paths speak would say it twice for one phone.
+            if critical_kind == "multiple_faces":
+                interrupt = interrupt_director.consider(session_id, "MULTIPLE_FACES")
         elif decision.get("active_confirmed"):
             # One uninterrupted face incident gets one violation and one proof
             # frame. Keep the standing risk visible without writing duplicates
@@ -565,6 +593,10 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
             {"kind": f["kind"], "text": f["text"], "critical": f["critical"]}
             for f in flags
         ],
+        # Present only on the frame a confirmed second person first appears; null
+        # otherwise. The frontend speaks it, so a non-null value here is a
+        # one-shot instruction rather than state to render every frame.
+        "interrupt": interrupt,
         "risk_packet": risk_packet,
     }
 
@@ -784,6 +816,17 @@ async def scan_objects(payload: ObjectScanPayload, background_tasks: BackgroundT
         "escalated": True,
         "objects": detected_objects,
         "verdict": verdict_text,
+        # Reached only past the `was_seen` latch and the confirmation gate above,
+        # so this is the first confirmed sweep of a newly-appeared prop — the
+        # rising edge, once per sighting.
+        #
+        # prop_kind is passed straight through rather than filtered to
+        # MOBILE_DEVICE here: PROHIBITED_ITEM has no entry in interrupts.LINES
+        # and so returns None on its own. A book or a laptop is not worth
+        # interrupting someone over — plenty of people sit at a desk with a
+        # second laptop — and keeping that decision in the copy table means the
+        # set of findings that may speak is stated in exactly one place.
+        "interrupt": interrupt_director.consider(session_id, prop_kind),
         "risk_packet": risk_packet,
     }
 
@@ -1318,6 +1361,11 @@ async def reset_session(candidate_id: str):
     # that no longer counts.
     episode_tracker.forget_candidate(candidate_id)
     prop_episode_tracker.forget_candidate(candidate_id)
+    # Same reasoning, one step further: a latched cooldown would swallow the first
+    # finding of the new run, and a half-advanced rotation would greet a first
+    # sighting with "your phone is visible AGAIN" about a session the user just
+    # erased.
+    interrupt_director.forget_candidate(candidate_id)
     return {"status": "success", "message": "Memory cleared."}
 
 
