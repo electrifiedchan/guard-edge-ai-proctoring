@@ -1,0 +1,23 @@
+# Everything in here is local working memory for coding-agent sessions.
+#
+# One file per working day, named for the date and for what that day actually
+# did: YYYY-MM-DD-short-title.md. No generic README, no index — the newest
+# filename should tell you what happened without opening it.
+#
+# Each file carries, in this order:
+#   1. What changed      — grouped by concern. Name the bug, not the edit.
+#   2. Why               — the reasoning not recoverable from the code.
+#   3. Verified          — what was run, and its result. "10 files green", not
+#                          "tests pass".
+#   4. Found, not fixed  — noticed in passing. Highest value for a later session.
+#   5. Next              — concrete, ordered, startable cold.
+#
+# Read the newest file before starting work, and verify any claim against the
+# source before acting on it — these notes describe what was true when written.
+#
+# This folder is deliberately NOT part of the repository's history: it goes stale
+# fast, it describes intent rather than code, and a reviewer reading the git log
+# should see commits, not a diary. Ignore everything except this file, so the
+# folder itself stays in the tree and a fresh clone still has somewhere to write.
+*
+!.gitignore

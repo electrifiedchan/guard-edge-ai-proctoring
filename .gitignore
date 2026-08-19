@@ -99,15 +99,26 @@ frontend/public/mediapipe/
 # Instructions for whichever assistant a given developer happens to drive the
 # repo with. They encode one person's tool and workflow, not how the project is
 # built or run, so they stay local.
+#
+# AGENTS.md is the deliberate exception and IS tracked: it is repository policy
+# addressed to every agent, not one developer's tool setup.
+#
+# opencode.json carries a provider API key in plaintext. Ignored so it cannot be
+# swept into a commit — rotate the key if it was ever shared.
 .clinerules
 .clineignore
 .claude/settings.json
 .claude/settings.local.json
+opencode.json
+
+# Pasted assistant transcripts kept for reference. A working log, not source.
+/chat with claude/
 
 
 # ─── Personal test data (never commit real resumes) ──────────────────────────
 testresume.pdf
 *.resume.pdf
+resume3(Ats)-links (1).pdf
 
 # ─── Scratch files ───────────────────────────────────────────────────────────
 # "/d" and "/0" are not real files — they are junk left by mistyped shell
