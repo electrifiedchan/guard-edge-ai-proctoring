@@ -1,10 +1,10 @@
-"""Regression tests for determine_verdict's pose narration.
+"""Regression tests for determine_verdict's pose narration and concurrent flags.
 
-The bug these cover: the frontend fuses a head-pose sensor and an iris sensor
-into ONE `head_pose` field. When only the iris had an opinion, the fusion still
-emitted HEAD_DOWN, and this function narrates every value as "head tilted X".
-The result on screen was "head tilted down" while the candidate sat dead centre
-and never moved their head — reported from a live run on 2026-08-07.
+The first bug these cover: the frontend fuses a head-pose sensor and an iris
+sensor into ONE `head_pose` field. When only the iris had an opinion, the fusion
+still emitted HEAD_DOWN, and this function narrates every value as "head tilted
+X". The result on screen was "head tilted down" while the candidate sat dead
+centre and never moved their head — reported from a live run on 2026-08-07.
 
 The frontend now reports an iris-only deflection as GAZE_*, so the two sensors
 stay distinguishable. What must hold here:
@@ -14,10 +14,20 @@ stay distinguishable. What must hold here:
      honest wording did not quietly stop attention drift from being scored.
   3. Neither is critical on its own — drift is a warning, not a violation.
 
-The second half of this file covers build_moment_caption, which had the mirror
-image of the same disease: `verdict` narrates ONE frame, but a moment is flagged
-off accumulated risk, so a clean frame inherited a HARD_WARNING badge while
-printing "Candidate is fully engaged and attentive." next to an evidence photo —
+The second bug: determine_verdict was one if/elif chain, so a frame could only
+ever name its single gravest finding. A candidate holding a phone while turned
+left was logged as "Mobile device detected" and the turn was never evaluated at
+all — the log box showed one flag because only one existed. Conditions are now
+independent and all live ones are returned in `flags`, gravest first. What must
+hold: concurrent conditions each appear exactly once, the gravest still leads
+the verdict string (the caption grep and the 200-char truncation both depend on
+it), and exactly one `critical_kind` still comes back so the BEA's per-condition
+confirmation counters stay separate.
+
+The third section covers build_moment_caption, which had the mirror image of the
+first disease: `verdict` narrates ONE frame, but a moment is flagged off
+accumulated risk, so a clean frame inherited a HARD_WARNING badge while printing
+"Candidate is fully engaged and attentive." next to an evidence photo —
 reported from a live run on 2026-08-12.
 """
 
@@ -42,9 +52,13 @@ def _verdict(pose: str, objects=None, faces: int = 1, talking: bool = False):
     return determine_verdict(objects or [], faces, talking, pose)
 
 
+def _flag_kinds(*args, **kwargs) -> list[str]:
+    return [f["kind"] for f in _verdict(*args, **kwargs)[5]]
+
+
 def test_gaze_labels_never_claim_the_head_moved():
     for pose in ("GAZE_DOWN", "GAZE_UP", "GAZE_LEFT", "GAZE_RIGHT"):
-        _, _, _, verdict, _ = _verdict(pose)
+        verdict = _verdict(pose)[3]
         assert "head" not in verdict.lower(), (
             f"{pose} narrated as a head movement: {verdict!r}"
         )
@@ -54,7 +68,7 @@ def test_gaze_labels_never_claim_the_head_moved():
 
 def test_head_labels_still_say_head():
     for pose in ("HEAD_DOWN", "HEAD_UP", "HEAD_LEFT", "HEAD_RIGHT"):
-        _, _, _, verdict, _ = _verdict(pose)
+        verdict = _verdict(pose)[3]
         assert "head tilted" in verdict.lower(), (
             f"{pose} lost its head wording: {verdict!r}"
         )
@@ -68,7 +82,7 @@ def test_direction_survives_the_rename():
         ("GAZE_DOWN", "down"), ("GAZE_UP", "up"),
         ("GAZE_LEFT", "left"), ("GAZE_RIGHT", "right"),
     ):
-        _, _, _, verdict, _ = _verdict(pose)
+        verdict = _verdict(pose)[3]
         assert word in verdict.lower(), f"{pose} lost its direction: {verdict!r}"
     print("PASS each gaze direction is narrated with the matching word")
 
@@ -87,22 +101,106 @@ def test_gaze_shares_risk_bucket_with_its_head_twin():
 
 def test_drift_is_a_warning_not_a_critical():
     for pose in ("GAZE_DOWN", "GAZE_LEFT", "HEAD_DOWN", "HEAD_LEFT"):
-        _, is_critical, kind, _, _ = _verdict(pose)
+        _, is_critical, kind, _, _, _ = _verdict(pose)
         assert not is_critical, f"{pose} escalated to critical on its own"
         assert kind is None, f"{pose} was given a critical kind: {kind!r}"
     print("PASS attention drift stays a warning")
 
 
 def test_centre_is_clean_and_objects_still_outrank_pose():
-    gaze, is_critical, _, verdict, _ = _verdict("HEAD_CENTER")
+    gaze, is_critical, _, verdict, _, flags = _verdict("HEAD_CENTER")
     assert gaze == "STRAIGHT" and not is_critical
     assert "drift" not in verdict.lower(), f"centre reported drift: {verdict!r}"
+    assert flags == [], f"a clean frame raised flags: {flags!r}"
 
-    # A phone in shot must win over any pose branch, gaze ones included.
-    _, is_critical, kind, verdict, _ = _verdict("GAZE_DOWN", objects=["cell phone"])
+    # A phone in shot must still be the FIRST thing named — _classify_moment_caption
+    # greps the caption and build_moment_caption truncates at 200, so a phone
+    # pushed to the back of a multi-flag string would be lost as evidence.
+    _, is_critical, kind, verdict, _, flags = _verdict("GAZE_DOWN", objects=["cell phone"])
     assert is_critical and kind == "object", "phone stopped being critical"
-    assert "Mobile device" in verdict, f"phone lost its verdict: {verdict!r}"
+    assert verdict.startswith("CRITICAL: Mobile device detected in frame."), (
+        f"phone is no longer the leading finding: {verdict!r}"
+    )
     print("PASS centre stays clean and objects still outrank pose")
+
+
+# --------------------------------------------------------------------------
+# Concurrent flags — the reason determine_verdict stopped being an if/elif chain
+# --------------------------------------------------------------------------
+
+def test_a_phone_no_longer_silences_the_head_turn():
+    """The reported bug: the log box could only ever show one flag, because the
+    old chain evaluated pose in an `elif` and so only computed it when nothing
+    graver had matched. A phone plus a turned head is TWO findings."""
+    kinds = _flag_kinds("HEAD_LEFT", objects=["cell phone (91%)"])
+    assert kinds == ["MOBILE_DEVICE", "ATTENTION_DRIFT"], (
+        f"phone and head turn did not both survive: {kinds!r}"
+    )
+
+    verdict = _verdict("HEAD_LEFT", objects=["cell phone (91%)"])[3]
+    assert "Mobile device" in verdict and "head tilted left" in verdict, (
+        f"one finding silenced the other: {verdict!r}"
+    )
+    print("PASS a phone and a head turn are reported as two concurrent flags")
+
+
+def test_talking_is_reported_alongside_a_critical():
+    """`talking and not is_critical` meant speech was suppressed by any critical —
+    an earpiece is most interesting exactly when something else is also wrong."""
+    kinds = _flag_kinds("HEAD_CENTER", faces=2, talking=True)
+    assert kinds == ["MULTIPLE_FACES", "SPEECH"], (
+        f"speech was silenced by the face critical: {kinds!r}"
+    )
+    print("PASS speech is reported even when a critical is live")
+
+
+def test_every_concurrent_condition_appears_once():
+    kinds = _flag_kinds(
+        "GAZE_DOWN", objects=["cell phone (88%)", "book (74%)"], talking=True
+    )
+    assert kinds == ["MOBILE_DEVICE", "PROHIBITED_ITEM", "ATTENTION_DRIFT", "SPEECH"], (
+        f"unexpected flag set: {kinds!r}"
+    )
+    assert len(kinds) == len(set(kinds)), f"a condition was double-billed: {kinds!r}"
+    print("PASS four simultaneous conditions each produce exactly one flag")
+
+
+def test_only_one_critical_kind_is_returned():
+    """critical_kind selects a BEA confirmation counter, and those must stay
+    separate — one condition must never count toward another's threshold. So
+    several criticals still yield exactly one kind, the gravest."""
+    _, is_critical, kind, _, _, flags = _verdict(
+        "HEAD_CENTER", objects=["cell phone (90%)"], faces=0
+    )
+    assert is_critical
+    assert kind == "object", f"face count outranked the phone: {kind!r}"
+    assert [f["kind"] for f in flags] == ["MOBILE_DEVICE", "NO_FACE"]
+    print("PASS several criticals still return one confirmation kind, gravest first")
+
+
+def test_pose_is_not_trusted_without_exactly_one_face():
+    """No face means no landmarks; several faces means the fused label describes
+    whichever face MediaPipe ranked first. Neither is a pose reading — but
+    neither may be recorded as STRAIGHT-and-clean either, so the face flag has
+    to carry the frame."""
+    for faces in (0, 2):
+        gaze, _, _, _, _, flags = _verdict("HEAD_LEFT", faces=faces)
+        assert gaze == "STRAIGHT", (
+            f"a {faces}-face frame invented a pose reading: {gaze!r}"
+        )
+        assert "ATTENTION_DRIFT" not in [f["kind"] for f in flags]
+        assert any(f["critical"] for f in flags), (
+            f"a {faces}-face frame produced no flag at all — it would be counted "
+            "as focused time by the dashboard"
+        )
+    print("PASS pose is only classified when exactly one face is present")
+
+
+def test_an_unknown_pose_label_is_not_a_deflection():
+    gaze, _, _, verdict, _, flags = _verdict("SOMETHING_NEW")
+    assert gaze == "STRAIGHT" and flags == []
+    assert verdict == CLEAN, f"an unknown label invented a finding: {verdict!r}"
+    print("PASS an unrecognised pose label is treated as no reading, not drift")
 
 
 # --------------------------------------------------------------------------
@@ -163,7 +261,7 @@ def test_a_phone_outranks_a_prohibited_item_in_one_caption():
 def test_a_drifting_frame_keeps_its_own_narration():
     """When the frame IS the reason, the frame string is the honest caption."""
     for pose in ("GAZE_DOWN", "HEAD_LEFT"):
-        gaze, is_critical, _, verdict, _ = _verdict(pose)
+        gaze, is_critical, _, verdict, _, _ = _verdict(pose)
         caption = build_moment_caption(verdict, is_critical, gaze, _packet())
         assert caption == verdict, f"{pose} lost its narration: {caption!r}"
         assert "drift" in caption.lower()
@@ -209,6 +307,12 @@ if __name__ == "__main__":
     test_gaze_shares_risk_bucket_with_its_head_twin()
     test_drift_is_a_warning_not_a_critical()
     test_centre_is_clean_and_objects_still_outrank_pose()
+    test_a_phone_no_longer_silences_the_head_turn()
+    test_talking_is_reported_alongside_a_critical()
+    test_every_concurrent_condition_appears_once()
+    test_only_one_critical_kind_is_returned()
+    test_pose_is_not_trusted_without_exactly_one_face()
+    test_an_unknown_pose_label_is_not_a_deflection()
     test_a_clean_frame_is_never_captioned_as_engaged()
     test_object_captions_pass_through_untouched()
     test_a_phone_outranks_a_prohibited_item_in_one_caption()

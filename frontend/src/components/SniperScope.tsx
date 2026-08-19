@@ -8,9 +8,20 @@ import { DEFAULT_PERSONA, type PersonaId } from "@/lib/personas";
 
 const TELEMETRY_INTERVAL_MS = 2000;
 
+export interface FrameFlag {
+  kind: string;
+  text: string;
+  critical: boolean;
+}
+
 export interface RiskPacket {
   candidate_id: string;
   risk_score: number;
+  // Highest risk the session ever reached. Monotonic — the backend only ever
+  // raises it. `risk_score` is a LIVE reading and correctly falls when the
+  // candidate recovers; this is what the "Cumulative risk" figure and the final
+  // report must quote, or a session that peaked at 100% reads as 0% seconds later.
+  peak_risk?: number;
   violation_count: number;
   critical_flags?: string[];
   intervention_level: "CLEAR" | "SOFT_WARNING" | "HARD_WARNING" | "WARNING_LOGGED" | "SEVERE_VIOLATION_LOGGED";
@@ -65,9 +76,21 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
   
   // Telemetry State
   const [riskScore, setRiskScore] = useState(0);
+  // Session high-water mark, shown as "Cumulative risk". Held separately from
+  // riskScore because that value is a live reading that falls back to 0 the
+  // moment the candidate looks straight again — so the panel showed the number
+  // climb to 100 and then vanish, which reads as the system forgetting. The
+  // backend is authoritative (bea._stamp_peak); Math.max here only guards
+  // against an older backend that omits the field.
+  const [peakRisk, setPeakRisk] = useState(0);
   const [violationCount, setViolationCount] = useState(0);
   const [interventionLevel, setInterventionLevel] = useState("CLEAR");
   const [latestVerdict, setLatestVerdict] = useState("SYSTEM STANDBY");
+  // Every condition true on the last analysed frame, in severity order. Empty on
+  // a clean frame and before the first response, which is when latestVerdict —
+  // still the single-string fallback for the object sweep and for standby text —
+  // is rendered instead.
+  const [flags, setFlags] = useState<FrameFlag[]>([]);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
   // Identity for this run, scoped to the resume being practised with.
@@ -119,6 +142,9 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
     // the 30fps gatekeeper was stamped onto the whole inference window as the
     // frame verdict. Telemetry now samples every two seconds.
     stable_pose: "HEAD_CENTER" as string | null,
+    // The two pre-fusion channels, smoothed the same way as stable_pose.
+    stable_head_pose_raw: "HEAD_CENTER" as string | null,
+    stable_gaze_class: "unknown" as string | null,
   });
   const gatekeeperRef = useRef<{ camera: any; faceMesh: any } | null>(null);
 
@@ -129,21 +155,37 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
   // frame of iris jitter crossing GAZE_DELTA_Y was enough to report a drift
   // while the user sat still. A frame has to be corroborated by its neighbours.
   const poseWindowRef = useRef<{ t: number; pose: string }[]>([]);
+  // Separate windows for the two PRE-FUSION channels. These exist so the
+  // asymmetric iris veto can be evaluated after the fact: the fused label alone
+  // cannot tell you what either sensor said before fusion, so a recorded session
+  // can't distinguish "the eyes vetoed a head turn" from "the head never turned".
+  //
+  // Each channel gets its OWN modal window rather than sharing the fused one.
+  // Comparing a smoothed fused label against raw per-frame sensor reads would
+  // make the pre-fusion channels look noisier purely because they weren't
+  // smoothed — the fused channel would win an unfair comparison.
+  const headWindowRef = useRef<{ t: number; pose: string }[]>([]);
+  const gazeWindowRef = useRef<{ t: number; pose: string }[]>([]);
   const POSE_WINDOW_MS = 1500;
   const POSE_MIN_SAMPLES = 3;
 
   /**
-   * Records a frame's pose call and returns the modal pose across the trailing
-   * window, or null while the window is too thin or too split to trust.
+   * Records one frame's call on a channel and returns the modal value across
+   * that channel's trailing window, or null while the window is too thin or too
+   * split to trust.
    */
-  const stablePose = (pose: string, now: number): string | null => {
-    poseWindowRef.current.push({ t: now, pose });
+  const stableOver = (
+    ref: { current: { t: number; pose: string }[] },
+    pose: string,
+    now: number,
+  ): string | null => {
+    ref.current.push({ t: now, pose });
     // Prune by TIME, not by count: the gatekeeper's frame rate varies with CPU
     // load, so a fixed-length ring would cover a different real duration on a
     // busy machine than on an idle one.
-    poseWindowRef.current = poseWindowRef.current.filter((s) => now - s.t <= POSE_WINDOW_MS);
+    ref.current = ref.current.filter((s) => now - s.t <= POSE_WINDOW_MS);
 
-    const w = poseWindowRef.current;
+    const w = ref.current;
     if (w.length < POSE_MIN_SAMPLES) return null;
     const counts = new Map<string, number>();
     for (const s of w) counts.set(s.pose, (counts.get(s.pose) ?? 0) + 1);
@@ -157,6 +199,13 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
     // drift was the dominant read, not merely the most common noise.
     return bestN * 2 > w.length ? best : null;
   };
+
+  /**
+   * Records a frame's pose call and returns the modal pose across the trailing
+   * window, or null while the window is too thin or too split to trust.
+   */
+  const stablePose = (pose: string, now: number): string | null =>
+    stableOver(poseWindowRef, pose, now);
 
   // Stable reference to parent callback — prevents the inference loop from being
   // re-created on every parent render, which previously spawned parallel loop chains
@@ -455,6 +504,15 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
       let talking = false;
       let pose = "HEAD_CENTER";
       let gazeVector = [0, 0];
+      // Pre-fusion sensor calls, hoisted so they survive past the landmark block
+      // and can be reported alongside the fused label. Defaults match the "no
+      // opinion" value of each classifier: HEAD_CENTER is classifyPose's null
+      // reading, "unknown" is classifyGaze's. With no face present neither ran,
+      // and the backend ignores pose entirely unless exactly one face is in
+      // shot, so these defaults are never analysed — they only keep the field
+      // types stable.
+      let headPoseRaw = "HEAD_CENTER";
+      let gazeClass = "unknown";
 
       if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
         faces = results.multiFaceLandmarks.length;
@@ -725,6 +783,13 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
         pose = fuseSensors(headPose, gazePose, headMagDeg);
         gazeVector = [currentGazeX, currentGazeY];
 
+        // Keep what each sensor said BEFORE fusion. fuseSensors is the paper's
+        // central mechanism and its inputs were discarded here, so no recorded
+        // session could show whether the veto changed the outcome on a real
+        // person — only the scripted harness could, by calling it directly.
+        headPoseRaw = headPose;
+        gazeClass = gazePose;
+
         // --- 4. Draw Overlay ---
         if (overlayRef.current && videoRef.current) {
           const canvas = overlayRef.current;
@@ -750,12 +815,17 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
         }
       }
 
+      const now = Date.now();
       telemetryRef.current = {
         faces_detected: faces,
         is_talking: talking,
         head_pose: pose,
         gaze_vector: gazeVector,
-        stable_pose: stablePose(pose, Date.now()),
+        stable_pose: stablePose(pose, now),
+        // Same modal smoothing, one window each, so all three channels are
+        // measured the same way.
+        stable_head_pose_raw: stableOver(headWindowRef, headPoseRaw, now),
+        stable_gaze_class: stableOver(gazeWindowRef, gazeClass, now),
       };
     });
 
@@ -845,7 +915,7 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
   };
 
   const handleReset = async () => {
-    if (riskScore === 0 && violationCount === 0 && interventionLevel === "CLEAR") {
+    if (riskScore === 0 && peakRisk === 0 && violationCount === 0 && interventionLevel === "CLEAR") {
       showToast("NO DATA TO CLEAR!", "error");
       return;
     }
@@ -856,9 +926,11 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
       });
       if (response.ok) {
         setRiskScore(0);
+        setPeakRisk(0);
         setViolationCount(0);
         setInterventionLevel("CLEAR");
         setLatestVerdict("SYSTEM STANDBY");
+        setFlags([]);
         // Reset calibration on manual clear
         calibrationRef.current = {
           isCalibrating: true,
@@ -969,11 +1041,18 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
       // When the window has not agreed, there is no evidence of anything; report
       // a centred pose rather than whichever noise happened to come last.
       const pose = telemetryRef.current.stable_pose ?? "HEAD_CENTER";
+      // Same fallback rule for the pre-fusion channels: an unsettled window is
+      // an absence of evidence, so report each classifier's no-opinion value
+      // rather than whichever noise arrived last.
+      const headPoseRaw = telemetryRef.current.stable_head_pose_raw ?? "HEAD_CENTER";
+      const gazeClass = telemetryRef.current.stable_gaze_class ?? "unknown";
 
       console.log("🚀 [FRONTEND] OUTGOING PAYLOAD:", {
         faces_detected: telemetryRef.current.faces_detected,
         is_talking: telemetryRef.current.is_talking,
         head_pose: pose,
+        head_pose_raw: headPoseRaw,
+        gaze_class: gazeClass,
         gaze_vector: telemetryRef.current.gaze_vector
       });
 
@@ -999,6 +1078,8 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
             faces_detected: telemetryRef.current.faces_detected,
             is_talking: telemetryRef.current.is_talking,
             head_pose: pose,
+            head_pose_raw: headPoseRaw,
+            gaze_class: gazeClass,
             gaze_vector: telemetryRef.current.gaze_vector
           })
         });
@@ -1009,9 +1090,11 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
 
         if (data.risk_packet) {
           setRiskScore(data.risk_packet.risk_score);
+          setPeakRisk((p) => Math.max(p, data.risk_packet.peak_risk ?? data.risk_packet.risk_score));
           setViolationCount(data.risk_packet.violation_count);
           setInterventionLevel(data.risk_packet.intervention_level);
           setLatestVerdict(data.verdict);
+          setFlags(Array.isArray(data.flags) ? data.flags : []);
 
           // Pass data up via stable ref — never re-binds the loop.
           onTelemetryUpdateRef.current(data.risk_packet, data.verdict);
@@ -1113,9 +1196,14 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
           // verdict the full telemetry loop owns.
           if (data.escalated && data.risk_packet) {
             setRiskScore(data.risk_packet.risk_score);
+            setPeakRisk((p) => Math.max(p, data.risk_packet.peak_risk ?? data.risk_packet.risk_score));
             setViolationCount(data.risk_packet.violation_count);
             setInterventionLevel(data.risk_packet.intervention_level);
             setLatestVerdict(data.verdict);
+            // The object sweep reports one prop and returns no flags array. Clear
+            // the telemetry flags rather than leaving stale lines from an earlier
+            // frame sitting under a fresh prop verdict.
+            setFlags([]);
             onTelemetryUpdateRef.current(data.risk_packet, data.verdict);
           }
         } catch {
@@ -1177,10 +1265,13 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
     danger: "border-[var(--color-danger)]/45 bg-[var(--color-danger)]/[0.07] text-[var(--color-danger)]",
   };
 
+  // Keyed to the peak, because it tints the peak figure. Tinting the session
+  // high-water mark by the live reading made a 100% session render in plain white
+  // the instant the candidate looked back.
   const riskColor =
-    riskScore >= 80 ? "text-[var(--color-danger)]" :
-    riskScore >= 40 ? "text-[var(--color-amber)]"  :
-    riskScore >= 20 ? "text-[var(--color-warn)]"   :
+    peakRisk >= 80 ? "text-[var(--color-danger)]" :
+    peakRisk >= 40 ? "text-[var(--color-amber)]"  :
+    peakRisk >= 20 ? "text-[var(--color-warn)]"   :
     "text-[var(--color-snow)]";
 
   return (
@@ -1374,15 +1465,24 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
             <div className="flex flex-col">
               <span className="eyebrow mb-0.5">Cumulative risk</span>
               <h2
-                data-text={`${riskScore}%`}
-                data-active={riskScore === 100 ? "true" : "false"}
+                data-text={`${peakRisk}%`}
+                data-active={peakRisk === 100 ? "true" : "false"}
                 className={`font-display text-[28px] leading-none tabular font-semibold tracking-tight transition-colors duration-500 ${riskColor} ${
-                  riskScore === 100 ? "glitch-text" : ""
+                  peakRisk === 100 ? "glitch-text" : ""
                 }`}
               >
-                {riskScore}
+                {peakRisk}
                 <span className="text-[var(--color-fog)] text-[18px] font-medium ml-0.5">%</span>
               </h2>
+              {/* The live reading, only while it differs. "Cumulative" has to mean
+                  cumulative — it used to show the live value, so it fell back to 0
+                  on recovery and the label was a lie. Showing both keeps the
+                  present tense visible without letting it erase the session. */}
+              {riskScore !== peakRisk && (
+                <span className="text-[10px] text-[var(--color-fog)] tabular mt-0.5">
+                  now {riskScore}%
+                </span>
+              )}
             </div>
 
             <div className={`px-2.5 py-1.5 rounded-lg border flex items-center gap-2 transition-colors duration-500 ${tierStyles[tierToken]}`}>
@@ -1424,19 +1524,43 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
           {/* Colour comes from the tier, NOT from sniffing the verdict text.
               Sniffing for "CRITICAL" meant the log painted danger-red while the
               Tier badge beside it still read HARD_WARNING — two independent
-              sources for one piece of state, guaranteed to disagree. */}
-          <p
-            className={`font-mono text-[13px] leading-snug ${
-              tierToken === "danger"
-                ? "text-[var(--color-danger)]"
-                : tierToken === "amber"
-                ? "text-[var(--color-amber)]"
-                : "text-[var(--color-parchment)]"
-            }`}
-          >
-            <span className="text-[var(--color-fog)] mr-2">&gt;</span>
-            {latestVerdict}
-          </p>
+              sources for one piece of state, guaranteed to disagree.
+
+              One line per flag. The backend used to compute a single verdict with
+              an if/elif chain, so a phone in shot silenced the head turn happening
+              in the same instant — the box showed one finding because only one was
+              ever calculated. It now returns every concurrent flag, and each gets
+              its own line so nothing is hidden behind something graver. */}
+          {flags.length > 0 ? (
+            <div className="flex flex-col gap-1">
+              {flags.map((f, i) => (
+                <p
+                  key={`${f.kind}-${i}`}
+                  className={`font-mono text-[13px] leading-snug ${
+                    f.critical
+                      ? "text-[var(--color-danger)]"
+                      : "text-[var(--color-amber)]"
+                  }`}
+                >
+                  <span className="text-[var(--color-fog)] mr-2">&gt;</span>
+                  {f.text}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <p
+              className={`font-mono text-[13px] leading-snug ${
+                tierToken === "danger"
+                  ? "text-[var(--color-danger)]"
+                  : tierToken === "amber"
+                  ? "text-[var(--color-amber)]"
+                  : "text-[var(--color-parchment)]"
+              }`}
+            >
+              <span className="text-[var(--color-fog)] mr-2">&gt;</span>
+              {latestVerdict}
+            </p>
+          )}
         </div>
 
       </div>

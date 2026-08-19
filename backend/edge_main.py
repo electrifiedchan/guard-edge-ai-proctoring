@@ -27,9 +27,11 @@ from core_memory.timeline import (
     init_timeline_tables,
     insert_frame,
     insert_moment,
+    close_moment,
     get_timeline,
     get_dashboard_summary,
 )
+from core_memory.episodes import EpisodeTracker
 from core_memory.voice_engine import transcribe_audio as whisper_transcribe
 import voice_engine
 import tempfile
@@ -168,8 +170,49 @@ def write_evidence_frame(session_id: str, image_base64: str) -> str | None:
 # ---------------------------------------------------------------------------
 # Verdict logic (unchanged)
 # ---------------------------------------------------------------------------
+def classify_pose(head_pose: str) -> tuple[str, str | None]:
+    """Map one fused pose label to (gaze_bucket, narration).
+
+    Split out of determine_verdict so the pose reading survives independently of
+    whether some graver condition also fired in the same frame. The previous
+    if/elif chain evaluated pose only when nothing else matched, so a frame with
+    two faces recorded gaze="STRAIGHT" — the head could be turned 40 degrees and
+    the dashboard counted it as focused time (timeline.py:522 keys focus on the
+    literal string "STRAIGHT").
+
+    Returns ("STRAIGHT", None) for a centred pose, and for anything unrecognised:
+    an unknown label is the absence of a reading, not a deflection.
+    """
+    if head_pose in ("HEAD_LEFT", "HEAD_RIGHT"):
+        direction = head_pose.replace("HEAD_", "").lower()
+        return "SIDE_OR_UP", f"head tilted {direction}"
+    if head_pose == "HEAD_UP":
+        return "SIDE_OR_UP", "head tilted up"
+    if head_pose == "HEAD_DOWN":
+        return "DOWN", "head tilted down"
+    if head_pose in ("GAZE_LEFT", "GAZE_RIGHT"):
+        direction = head_pose.replace("GAZE_", "").lower()
+        return "SIDE_OR_UP", f"eyes drifted {direction}"
+    if head_pose == "GAZE_UP":
+        return "SIDE_OR_UP", "eyes drifted up"
+    if head_pose == "GAZE_DOWN":
+        return "DOWN", "eyes drifted down"
+    return "STRAIGHT", None
+
+
 def determine_verdict(detected_objects: list, faces: int, talking: bool, head_pose: str):
-    """Returns (gaze, is_critical, critical_kind, verdict, logic_trace).
+    """Returns (gaze, is_critical, critical_kind, verdict, logic_trace, flags).
+
+    Every condition is now tested INDEPENDENTLY and all of them are reported.
+    The old chain was `if object / elif faces / elif pose`, which meant the
+    frame could only ever name its single gravest finding: a candidate holding a
+    phone while turned left was logged as "Mobile device detected" and the turn
+    was discarded — not ranked below the phone, but never recorded at all. The
+    log box could therefore only ever show one flag, because only one existed.
+
+    `flags` is the ordered list of everything true about this frame, gravest
+    first. `verdict` is those flags joined into one sentence, so the string
+    contract the rest of the system greps still holds.
 
     `critical_kind` splits criticals by how much a single frame can be trusted:
       "object"    — a phone/book/laptop is physically in shot. YOLO is restricted
@@ -186,57 +229,83 @@ def determine_verdict(detected_objects: list, faces: int, talking: bool, head_po
       "no_face" / "multiple_faces" — confirmed independently with consecutive
                     samples so one condition cannot count toward the other.
 
-    Object detection is checked BEFORE face count. A candidate raising a phone
-    usually occludes or turns their face at the same moment, so a face-first
-    ordering reported "face not visible" and the phone never surfaced.
+    Only ONE critical_kind is returned even when several criticals are live,
+    because it selects a confirmation counter in the BEA and those counters must
+    stay separate (one condition must not count toward another's threshold).
+    Severity order — object, then no_face, then multiple_faces — is preserved
+    from the old chain: a phone in shot outranks the face count because a
+    candidate raising a phone usually occludes or turns their face in the same
+    moment, and a face-first ordering reported "face not visible" while the
+    phone never surfaced.
     """
-    is_critical = False
-    critical_kind = None
-    gaze = "STRAIGHT"
-    verdict = "Candidate is fully engaged and attentive."
+    flags: list[dict] = []
 
     if any("cell phone" in obj.lower() for obj in detected_objects):
-        is_critical = True
-        critical_kind = "object"
-        verdict = "CRITICAL: Mobile device detected in frame."
-    elif any("book" in obj.lower() or "laptop" in obj.lower() for obj in detected_objects):
-        is_critical = True
-        critical_kind = "object"
-        verdict = "CRITICAL: Prohibited item detected on desk."
-    elif faces == 0:
-        is_critical = True
-        critical_kind = "no_face"
-        verdict = "CRITICAL: Candidate face not visible or obscured."
+        flags.append({
+            "kind": "MOBILE_DEVICE",
+            "critical": True,
+            "critical_kind": "object",
+            "text": "CRITICAL: Mobile device detected in frame.",
+        })
+    if any("book" in obj.lower() or "laptop" in obj.lower() for obj in detected_objects):
+        flags.append({
+            "kind": "PROHIBITED_ITEM",
+            "critical": True,
+            "critical_kind": "object",
+            "text": "CRITICAL: Prohibited item detected on desk.",
+        })
+    if faces == 0:
+        flags.append({
+            "kind": "NO_FACE",
+            "critical": True,
+            "critical_kind": "no_face",
+            "text": "CRITICAL: Candidate face not visible or obscured.",
+        })
     elif faces > 1:
-        is_critical = True
-        critical_kind = "multiple_faces"
-        verdict = "CRITICAL: Multiple persons detected in frame."
-    elif head_pose in ["HEAD_LEFT", "HEAD_RIGHT", "HEAD_UP"]:
-        gaze = "SIDE_OR_UP"
-        direction = head_pose.replace("HEAD_", "").lower()
-        verdict = f"Attention drift detected: head tilted {direction}."
-    elif head_pose == "HEAD_DOWN":
-        gaze = "DOWN"
-        verdict = "Attention drift detected: head tilted down."
-    elif head_pose in ["GAZE_LEFT", "GAZE_RIGHT"]:
-        gaze = "SIDE_OR_UP"
-        direction = head_pose.replace("GAZE_", "").lower()
-        verdict = f"Attention drift detected: eyes drifted {direction}."
-    elif head_pose == "GAZE_DOWN":
-        gaze = "DOWN"
-        verdict = "Attention drift detected: eyes drifted down."
-    elif head_pose == "GAZE_UP":
-        gaze = "SIDE_OR_UP"
-        verdict = "Attention drift detected: eyes drifted up."
+        flags.append({
+            "kind": "MULTIPLE_FACES",
+            "critical": True,
+            "critical_kind": "multiple_faces",
+            "text": "CRITICAL: Multiple persons detected in frame.",
+        })
 
-    if talking and not is_critical:
-        verdict += " Verbal activity detected — possible earpiece coaching."
+    # Pose is read on every frame, but only trusted when exactly one face is
+    # present: with no face there are no landmarks to classify, and with several
+    # the fused label describes whichever face MediaPipe happened to rank first.
+    gaze = "STRAIGHT"
+    if faces == 1:
+        gaze, pose_narration = classify_pose(head_pose)
+        if pose_narration:
+            flags.append({
+                "kind": "ATTENTION_DRIFT",
+                "critical": False,
+                "critical_kind": None,
+                "text": f"Attention drift detected: {pose_narration}.",
+            })
+
+    if talking:
+        flags.append({
+            "kind": "SPEECH",
+            "critical": False,
+            "critical_kind": None,
+            "text": "Verbal activity detected — possible earpiece coaching.",
+        })
+
+    criticals = [f for f in flags if f["critical"]]
+    is_critical = bool(criticals)
+    critical_kind = criticals[0]["critical_kind"] if criticals else None
+
+    if flags:
+        verdict = " ".join(f["text"] for f in flags)
+    else:
+        verdict = "Candidate is fully engaged and attentive."
 
     logic_trace = (
         f"Objects: {detected_objects or 'None'} | Faces: {faces} "
-        f"| Pose: {head_pose} | Talking: {talking}"
+        f"| Pose: {head_pose} | Talking: {talking} "
+        f"| Flags: {', '.join(f['kind'] for f in flags) or 'None'}"
     )
-    return gaze, is_critical, critical_kind, verdict, logic_trace
+    return gaze, is_critical, critical_kind, verdict, logic_trace, flags
 
 
 def build_moment_caption(
@@ -285,9 +354,28 @@ class FramePayload(BaseModel):
     faces_detected: int = 1
     is_talking: bool = False
     head_pose: str = "HEAD_CENTER"
+    # The two PRE-FUSION sensor calls behind head_pose. head_pose is the fused
+    # label the system acts on; these two say what each sensor believed before
+    # the iris veto was applied. Both are recorded but neither is acted on — the
+    # decision path is unchanged.
+    #
+    # They exist because the veto could not be evaluated on a recorded session
+    # without them: given only "HEAD_CENTER" you cannot tell a candidate who
+    # never moved from one whose head turn was vetoed by centred eyes. Defaults
+    # keep older clients that don't send them working.
+    head_pose_raw: str = "HEAD_CENTER"
+    gaze_class: str = "unknown"
     gaze_vector: list[float] | None = None
     # Optional: frontend may pass the active session_id once sessions are wired
     session_id: str | None = None
+
+
+# Collapses the per-frame flag stream into one record per contiguous stretch.
+# Process-wide and in-memory, like _prop_seen below: episode state is only
+# meaningful while a session is actually streaming, and a restart mid-session
+# loses the open episode's start time either way — nothing here is worth a
+# database round trip on every frame.
+episode_tracker = EpisodeTracker()
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +421,7 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
     detected_objects = []
 
     # --- PHASE 3: Deterministic verdict ---
-    gaze, is_critical, critical_kind, verdict, logic_trace = determine_verdict(
+    gaze, is_critical, critical_kind, verdict, logic_trace, flags = determine_verdict(
         detected_objects=detected_objects,
         faces=payload.faces_detected,
         talking=payload.is_talking,
@@ -405,20 +493,56 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
         payload.head_pose,
         payload.faces_detected,
         payload.is_talking,
+        payload.head_pose_raw,
+        payload.gaze_class,
     )
 
-    # Write evidence frame and log as a moment when BEA flags it
-    if autopsy_flag:
+    # Write evidence frame and log as a moment when BEA flags it.
+    #
+    # Episode grain, not frame grain. autopsy_flag is true on EVERY frame while
+    # risk sits at or above 75 and telemetry samples every 2 s, so this block used
+    # to write a row and a JPEG roughly ten times for one continuous look-away —
+    # ten photographs of the same person in the same position, each shown to them
+    # as a separate finding. The tracker collapses those into one row per flag
+    # kind with a real start, end and duration, and takes exactly one photo: the
+    # frame that opened the episode, which is the frame that caused the flag.
+    #
+    # observe() is called on EVERY frame, not only flagged ones, because an
+    # episode needs a frame without the behaviour in order to close.
+    active_kinds = [f["kind"] for f in flags] if autopsy_flag else []
+    opened, closed = episode_tracker.observe(session_id, t_now, active_kinds)
+
+    if opened:
+        # One image for the whole episode, captured now while we still hold the
+        # frame. Several kinds opening on the same frame share it — it is one
+        # photograph of one instant, and duplicating the file per kind would put
+        # more copies of a participant's face on disk to say the same thing.
         evidence_url = write_evidence_frame(session_id, payload.image_base64)
         moment_caption = build_moment_caption(verdict, is_critical, gaze, risk_packet)
+        by_kind = {f["kind"]: f for f in flags}
+        for episode in opened:
+            flag = by_kind.get(episode["kind"])
+            # Caption per kind so a row says why IT fired, rather than repeating
+            # the whole multi-flag sentence on every row.
+            caption = flag["text"] if flag else moment_caption
+            background_tasks.add_task(
+                insert_moment,
+                episode["moment_id"],
+                session_id,
+                episode["t_start"],
+                risk_packet.get("intervention_level", "WARNING"),
+                caption[:200],
+                evidence_url,
+                episode["kind"],
+            )
+
+    for episode in closed:
         background_tasks.add_task(
-            insert_moment,
-            uuid.uuid4().hex,
-            session_id,
-            t_now,
-            risk_packet.get("intervention_level", "WARNING"),
-            moment_caption,
-            evidence_url,
+            close_moment,
+            episode["moment_id"],
+            episode["t_end"],
+            episode["duration_sec"],
+            episode["frame_count"],
         )
 
     background_tasks.add_task(bea_engine.cleanup_stale_sessions)
@@ -434,6 +558,13 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
         "timestamp": payload.timestamp,
         "verdict": verdict,
         "gaze": gaze,
+        # Every condition true in this frame, gravest first. The log box renders
+        # this list; `verdict` remains the single-string form for callers that
+        # only want one line (and for the caption greps).
+        "flags": [
+            {"kind": f["kind"], "text": f["text"], "critical": f["critical"]}
+            for f in flags
+        ],
         "risk_packet": risk_packet,
     }
 
@@ -474,6 +605,19 @@ _prop_seen: dict[str, bool] = {}
 PROP_CLEAR_SWEEPS = int(os.getenv("BEA_PROP_CLEAR_SWEEPS", "3"))
 _prop_clear_streak: dict[str, int] = {}
 _phone_lower_streak: dict[str, int] = {}
+
+# A SECOND tracker, deliberately not the telemetry one.
+#
+# _close_expired closes every kind absent from the frame it is given, so a single
+# shared tracker would have the 1.2 s object sweep — which never reports poses or
+# face counts — expiring the 2 s telemetry loop's ATTENTION_DRIFT episodes, and
+# vice versa. Each loop only knows its own vocabulary, so each gets its own book.
+#
+# The gap matches the risk latch above (PROP_CLEAR_SWEEPS sweeps of PROP_SCAN_MS)
+# rather than the telemetry default, so an episode boundary and a re-billable
+# incident are the same event. With a shorter gap the evidence page would show a
+# second sighting the risk engine had not charged for.
+prop_episode_tracker = EpisodeTracker(gap_sec=PROP_CLEAR_SWEEPS * 1.2)
 
 
 def _detect_objects(results, names: dict, min_conf: float = 0.0) -> list[str]:
@@ -569,6 +713,29 @@ async def scan_objects(payload: ObjectScanPayload, background_tasks: BackgroundT
         if streak >= PROP_CLEAR_SWEEPS:
             _prop_seen[bea_key] = False
 
+    # Episode bookkeeping runs on EVERY sweep, including clean ones — an episode
+    # needs a sweep without the prop in order to end. The moment row is still only
+    # written on the gated path below, so an episode the risk engine declined to
+    # bill simply has no row; close_moment on an id that was never inserted
+    # updates nothing, which is the behaviour we want.
+    prop_kind = None
+    if verdict is not None:
+        prop_kind = (
+            "MOBILE_DEVICE" if "mobile device" in verdict.lower() else "PROHIBITED_ITEM"
+        )
+    t_sweep = time.time()
+    prop_opened, prop_closed = prop_episode_tracker.observe(
+        session_id, t_sweep, [prop_kind] if prop_kind else []
+    )
+    for episode in prop_closed:
+        background_tasks.add_task(
+            close_moment,
+            episode["moment_id"],
+            episode["t_end"],
+            episode["duration_sec"],
+            episode["frame_count"],
+        )
+
     # Nothing there, or the same prop we already flagged — stop here.
     #
     # Deliberately NOT calling record_critical_signal(False) on the clear path:
@@ -595,17 +762,21 @@ async def scan_objects(payload: ObjectScanPayload, background_tasks: BackgroundT
     verdict_text = f"CONFIRMED: {consolidated}"
 
     # Same evidence trail as the main loop, so the prop still shows up on the
-    # verdict page with the frame that caught it.
+    # verdict page with the frame that caught it. The moment_id comes from the
+    # episode rather than a fresh uuid, so the closing sweep can fill in the end
+    # time and duration on THIS row.
     if risk_packet.get("autopsy_flag", False):
         evidence_url = write_evidence_frame(session_id, payload.image_base64)
+        episode = prop_opened[0] if prop_opened else None
         background_tasks.add_task(
             insert_moment,
-            uuid.uuid4().hex,
+            episode["moment_id"] if episode else uuid.uuid4().hex,
             session_id,
-            time.time(),
+            episode["t_start"] if episode else t_sweep,
             risk_packet.get("intervention_level", "WARNING"),
             verdict_text[:200],
             evidence_url,
+            prop_kind,
         )
 
     return {
@@ -746,6 +917,11 @@ VIOLATION_TYPES = {
     "TALKING":         lambda row: bool(row.get("is_talking")),
 }
 
+# Types that only the moments table can supply — YOLO labels are not stored per
+# frame. Every other type is derived from timeline_frames above, so counting it
+# from moments as well would bill the same behaviour twice.
+_MOMENT_ONLY_TYPES = ("MOBILE_DEVICE", "PROHIBITED_ITEM")
+
 
 def _classify_moment_caption(caption: str) -> str | None:
     """Map a flagged moment's verdict text to an object-violation type.
@@ -771,7 +947,16 @@ def _classify_moment_caption(caption: str) -> str | None:
     return None
 
 
-INFERENCE_CADENCE_SEC = 5
+# Seconds of real time each analysed frame stands for, used only to turn a frame
+# COUNT into an approximate duration on the verdict page.
+#
+# This must track TELEMETRY_INTERVAL_MS in frontend/src/components/SniperScope.tsx.
+# It was left at 5 after that loop was sped up to 2000 ms, so every duration shown
+# to a candidate was inflated 2.5x — a 12-second glance away was reported back to
+# them as half a minute. Overstating someone's behaviour in a report they are
+# meant to trust is worse than saying nothing, so it is an env var now and the
+# two numbers are named in each other's comments.
+INFERENCE_CADENCE_SEC = float(os.getenv("GUARD_INFERENCE_CADENCE_SEC", "2"))
 
 VIOLATION_LABELS = {
     "DOWN_GAZE":  "looking down (off-screen / at lap)",
@@ -809,7 +994,7 @@ def _compute_session_breakdown(session_id: str, since_iso: str | None = None) ->
         moment_rows = [
             dict(r)
             for r in conn.execute(
-                "SELECT t, type, caption, evidence_url FROM moments "
+                "SELECT t, type, caption, evidence_url, kind, duration_sec FROM moments "
                 "WHERE (session_id = ? OR session_id LIKE ?) ORDER BY t",
                 (session_id, f"{session_id}__%"),
             )
@@ -837,6 +1022,9 @@ def _compute_session_breakdown(session_id: str, since_iso: str | None = None) ->
     buckets: dict[str, dict] = {
         t: {"count": 0, "first_at": None, "last_at": None,
             "peak_risk": 0, "peak_intervention_level": "CLEAR",
+            # Measured wall-clock seconds, summed from episode durations. Stays
+            # 0 for types rebuilt from frame counts, which have no measured span.
+            "measured_seconds": 0.0,
             "evidence_paths": [], "sample_events": []}
         for t in ALL_TYPES
     }
@@ -874,8 +1062,23 @@ def _compute_session_breakdown(session_id: str, since_iso: str | None = None) ->
     # Object criticals (phone / book) can't be rebuilt from timeline_frames —
     # YOLO labels aren't stored per frame. Recover them straight from the
     # flagged moments' captions so their captured images still surface.
+    #
+    # Each row is now one EPISODE, not one frame, so count is a count of separate
+    # sightings and duration_sec is the measured length of each. Multiplying this
+    # count by the frame cadence would report a 30-second phone as 2 seconds, so
+    # measured time is summed instead and wins below wherever it exists.
     for m in moment_rows:
-        vtype = _classify_moment_caption(m.get("caption", ""))
+        # Prefer the stored kind — it is the flag identity the detector actually
+        # produced. Reading it back out of English prose was only ever a
+        # workaround for not having this column, and it stays as the fallback for
+        # rows written before the column existed.
+        #
+        # Restricted to the object types on purpose: every other kind is already
+        # counted from timeline_frames by the predicates above, so admitting them
+        # here would bill the same behaviour twice.
+        vtype = m.get("kind") if m.get("kind") in _MOMENT_ONLY_TYPES else None
+        if vtype is None:
+            vtype = _classify_moment_caption(m.get("caption", ""))
         if not vtype:
             continue
         b = buckets[vtype]
@@ -884,6 +1087,11 @@ def _compute_session_breakdown(session_id: str, since_iso: str | None = None) ->
         if b["first_at"] is None:
             b["first_at"] = ts
         b["last_at"] = ts
+        # NULL on rows written before episodes existed, and on an episode that was
+        # never closed. Both mean "length unknown" — treat the row as one cadence
+        # tick rather than inventing a span for it.
+        span = m.get("duration_sec")
+        b["measured_seconds"] += float(span) if span else INFERENCE_CADENCE_SEC
         url = m.get("evidence_url")
         if url and url not in b["evidence_paths"] and len(b["evidence_paths"]) < 6:
             b["evidence_paths"].append(url)
@@ -892,7 +1100,9 @@ def _compute_session_breakdown(session_id: str, since_iso: str | None = None) ->
     for vtype, b in buckets.items():
         if b["count"] == 0:
             continue
-        b["approx_total_seconds"] = b["count"] * INFERENCE_CADENCE_SEC
+        measured = b.pop("measured_seconds")
+        # Measured episode time when we have it; frame count x cadence otherwise.
+        b["approx_total_seconds"] = int(round(measured or b["count"] * INFERENCE_CADENCE_SEC))
         violations_by_type[vtype] = b
 
 
@@ -951,6 +1161,24 @@ class FinalStats(BaseModel):
 
 @app.post("/generate-verdict")
 async def generate_verdict(stats: FinalStats):
+    # Flush any episode still open, on both loops. The session has ended, so no
+    # further frame or sweep will ever arrive to expire it — and the episode most
+    # likely to be open at this moment is the one the candidate never recovered
+    # from, which is exactly the one the report should be able to put a duration
+    # on. Done BEFORE the breakdown is computed so those rows are complete when
+    # it reads them.
+    for tracker in (episode_tracker, prop_episode_tracker):
+        for episode in tracker.close_candidate(stats.candidate_id):
+            try:
+                close_moment(
+                    episode["moment_id"],
+                    episode["t_end"],
+                    episode["duration_sec"],
+                    episode["frame_count"],
+                )
+            except Exception as e:
+                logger.warning(f"⚠️ Could not close episode {episode['moment_id']}: {e}")
+
     try:
         breakdown = _compute_session_breakdown(stats.candidate_id, since_iso=stats.session_started_at)
     except Exception as e:
@@ -1084,6 +1312,12 @@ async def reset_session(candidate_id: str):
     _prop_seen.pop(candidate_id, None)
     _prop_clear_streak.pop(candidate_id, None)
     _phone_lower_streak.pop(candidate_id, None)
+    # Drop open episodes rather than closing them. "Clear memory" means the run
+    # is being discarded, so writing an end time and duration for a stretch the
+    # user just erased would leave a finished-looking row pointing at a session
+    # that no longer counts.
+    episode_tracker.forget_candidate(candidate_id)
+    prop_episode_tracker.forget_candidate(candidate_id)
     return {"status": "success", "message": "Memory cleared."}
 
 

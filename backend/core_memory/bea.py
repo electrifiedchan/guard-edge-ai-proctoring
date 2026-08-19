@@ -27,6 +27,20 @@ TIER_SOFT_PENALTY = 20
 TIER_WARN_PENALTY = 50
 TIER_HARD_PENALTY = 100
 
+# Interpolate the live penalty between tier thresholds instead of stepping.
+#
+# _tier_for used to return a flat penalty per band, so a candidate looking away
+# sat at exactly 20% for three seconds, jumped to 50%, sat there, then jumped to
+# 100%. The ring showed nothing while the timer was actually running, which reads
+# as a frozen or broken meter — and the moment it finally moved it moved 30
+# points, which reads as an overreaction to nothing.
+#
+# With this on, the penalty rises smoothly with elapsed seconds toward the next
+# tier's value, so the number the candidate sees tracks the thing being measured.
+# The tier INDEX and the committed historical events are unchanged: escalation
+# still happens at the thresholds, only the displayed number moves continuously.
+PROGRESSIVE_RISK = os.getenv("BEA_PROGRESSIVE_RISK", "1") != "0"
+
 
 class BehavioralEventAccumulator:
     def __init__(self, window_size_seconds: int = 300):
@@ -54,6 +68,18 @@ class BehavioralEventAccumulator:
             "side_recorded_tier": 0,
             # Last-touched wall-clock timestamp; cleanup uses this, NOT events emptiness
             "last_activity": time.time(),
+            # Highest risk this session ever reached. Never decays.
+            #
+            # risk_score is deliberately transient: events age out of the sliding
+            # window and the live tier penalty vanishes the moment the candidate
+            # looks back, which is correct for a LIVE meter. It is wrong for a
+            # report. A session that peaked at 100% read as 0% by the time the
+            # verdict was generated, so the page said "peak risk 0%" about a run
+            # that had just been flagged — and the candidate watched the number
+            # climb to 100 and then fall to nothing, which looks like the system
+            # forgot. This is the number the report quotes.
+            "peak_risk": 0,
+            "peak_risk_at": None,
         }
 
     async def _ensure_candidate(self, candidate_id: str):
@@ -192,7 +218,7 @@ class BehavioralEventAccumulator:
             # Counts as a hard event so risk stays elevated after the object leaves.
             state["events"].append(time.time())
 
-            return {
+            return self._stamp_peak(candidate_id, {
                 "candidate_id": candidate_id,
                 "risk_score": 100,
                 "violation_count": len(state["events"]),
@@ -200,7 +226,7 @@ class BehavioralEventAccumulator:
                 "intervention_level": "SEVERE_VIOLATION_LOGGED",
                 "is_locked": False,
                 "autopsy_flag": True,
-            }
+            })
 
     async def trigger_fatal_lockout(self, candidate_id: str, reason: str = "") -> dict:
         """Logs a fatal-level violation silently (Mobile Phone / Tab Switch).
@@ -284,6 +310,12 @@ class BehavioralEventAccumulator:
             if live_penalty > packet["risk_score"]:
                 packet["risk_score"] = live_penalty
                 packet["intervention_level"], packet["autopsy_flag"] = self._level_for(live_penalty)
+                # Re-stamp: _calculate_risk already ratcheted the peak against the
+                # windowed score, and this line just raised the score above it.
+                # Without this the peak would miss every rise that came from a
+                # sustained look-away rather than from committed events — which is
+                # most of them.
+                self._stamp_peak(candidate_id, packet)
 
             packet["gaze_state"] = live_state
             packet["gaze_duration_sec"] = round(live_duration, 1)
@@ -295,13 +327,36 @@ class BehavioralEventAccumulator:
 
     @staticmethod
     def _tier_for(duration: float, soft: float, warn: float, hard: float):
-        """Maps a sustained-gaze duration to (tier, risk_penalty, seconds_to_next_tier)."""
+        """Maps a sustained-gaze duration to (tier, risk_penalty, seconds_to_next_tier).
+
+        The tier index is a hard band — escalation and event commits key off it.
+        The penalty is interpolated within the band when PROGRESSIVE_RISK is on, so
+        the displayed number climbs with the seconds actually elapsed rather than
+        sitting still and then leaping 30 points at a threshold.
+        """
         if duration < soft:
-            return 0, 0, soft - duration
+            penalty = (
+                int(TIER_SOFT_PENALTY * (duration / soft))
+                if PROGRESSIVE_RISK and soft > 0
+                else 0
+            )
+            return 0, penalty, soft - duration
         if duration < warn:
-            return 1, TIER_SOFT_PENALTY, warn - duration
+            penalty = (
+                TIER_SOFT_PENALTY
+                + int((TIER_WARN_PENALTY - TIER_SOFT_PENALTY) * ((duration - soft) / (warn - soft)))
+                if PROGRESSIVE_RISK and warn > soft
+                else TIER_SOFT_PENALTY
+            )
+            return 1, penalty, warn - duration
         if duration < hard:
-            return 2, TIER_WARN_PENALTY, hard - duration
+            penalty = (
+                TIER_WARN_PENALTY
+                + int((TIER_HARD_PENALTY - TIER_WARN_PENALTY) * ((duration - warn) / (hard - warn)))
+                if PROGRESSIVE_RISK and hard > warn
+                else TIER_WARN_PENALTY
+            )
+            return 2, penalty, hard - duration
         return 3, TIER_HARD_PENALTY, None
 
     @staticmethod
@@ -325,6 +380,29 @@ class BehavioralEventAccumulator:
         if risk_score >= 20:
             return "SOFT_WARNING", False
         return "CLEAR", False
+
+    def _stamp_peak(self, candidate_id: str, packet: dict) -> dict:
+        """Ratchet the session peak up to this packet's risk and report it.
+
+        Called at EVERY point a packet leaves the accumulator, because risk is
+        assembled in several places (the sliding window, the live tier floor, a
+        confirmed critical, a lockout) and a peak that only some of them updated
+        would be silently wrong for exactly the sessions that mattered most.
+
+        Monotonic by construction: max() only. Nothing lowers a peak except
+        reset_candidate, which throws the whole session away.
+        """
+        state = self.memory.get(candidate_id)
+        if state is None:
+            packet["peak_risk"] = packet.get("risk_score", 0)
+            return packet
+        risk = packet.get("risk_score", 0)
+        if risk > state.get("peak_risk", 0):
+            state["peak_risk"] = risk
+            state["peak_risk_at"] = time.time()
+        packet["peak_risk"] = state["peak_risk"]
+        packet["peak_risk_at"] = state["peak_risk_at"]
+        return packet
 
     async def get_state(self, candidate_id: str) -> dict:
         async with self.lock:
@@ -355,7 +433,7 @@ class BehavioralEventAccumulator:
             risk_score = min(risk_score + 15, 100)
 
         level, autopsy_flag = self._level_for(risk_score)
-        return {
+        return self._stamp_peak(candidate_id, {
             "candidate_id": candidate_id,
             "risk_score": risk_score,
             "violation_count": count,
@@ -363,11 +441,11 @@ class BehavioralEventAccumulator:
             "intervention_level": level,
             "is_locked": False,
             "autopsy_flag": autopsy_flag
-        }
+        })
 
     def _generate_locked_state(self, candidate_id: str) -> dict:
         memory = self.memory.get(candidate_id, {})
-        return {
+        return self._stamp_peak(candidate_id, {
             "candidate_id": candidate_id,
             "risk_score": 100,
             "violation_count": len(memory.get("events", [])),
@@ -375,7 +453,8 @@ class BehavioralEventAccumulator:
             "intervention_level": "SEVERE_VIOLATION_LOGGED",
             "is_locked": False,
             "autopsy_flag": True
-        }
+        })
+
 
     async def reset_candidate(self, candidate_id: str):
         async with self.lock:

@@ -44,6 +44,8 @@ def init_timeline_tables() -> None:
                 composure      REAL,
                 gaze           TEXT,
                 head_pose      TEXT,
+                head_pose_raw  TEXT,
+                gaze_class     TEXT,
                 faces_detected INTEGER,
                 is_talking     BOOLEAN
             )
@@ -55,9 +57,50 @@ def init_timeline_tables() -> None:
                 t            REAL,
                 type         TEXT,
                 caption      TEXT,
-                evidence_url TEXT
+                evidence_url TEXT,
+                kind         TEXT,
+                t_end        REAL,
+                duration_sec REAL,
+                frame_count  INTEGER
             )
         """)
+        _migrate_columns(conn)
+
+
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS is a no-op on
+# a database that already has the table, so a developer or participant machine
+# carrying an older guard_telemetry.db would keep the old shape and every insert
+# naming a new column would fail. ALTER TABLE ADD COLUMN is the only additive
+# path SQLite offers; it backfills NULL, which is the honest value for a frame
+# recorded before the field was captured.
+_ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "timeline_frames": [
+        ("head_pose_raw", "TEXT"),
+        ("gaze_class", "TEXT"),
+    ],
+    # Episode grain. `type` already holds the intervention level, so the flag
+    # kind gets its own column rather than overloading it: the verdict page
+    # groups by kind, and deriving kind by grepping the caption (which is what
+    # _classify_moment_caption has to do for legacy rows) only ever worked for
+    # the two object flags.
+    "moments": [
+        ("kind", "TEXT"),
+        ("t_end", "REAL"),
+        ("duration_sec", "REAL"),
+        ("frame_count", "INTEGER"),
+    ],
+}
+
+
+def _migrate_columns(conn: sqlite3.Connection) -> None:
+    """Add any missing columns to existing tables. Safe to run on every startup."""
+    for table, columns in _ADDED_COLUMNS.items():
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if not existing:
+            continue  # table absent entirely; CREATE above owns it
+        for name, decl in columns:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
 
 def insert_frame(
@@ -69,16 +112,26 @@ def insert_frame(
     head_pose: str,
     faces_detected: int,
     is_talking: bool,
+    head_pose_raw: str | None = None,
+    gaze_class: str | None = None,
 ) -> None:
-    """Insert one telemetry frame into timeline_frames."""
+    """Insert one telemetry frame into timeline_frames.
+
+    head_pose_raw and gaze_class are the pre-fusion sensor calls; head_pose is
+    the fused label the system acted on. They are keyword-defaulted so existing
+    callers and tests keep working, and so a frame from a client that doesn't
+    send them stores NULL rather than a fabricated reading.
+    """
     with contextlib.closing(_db()) as conn, conn:
         conn.execute(
             """
             INSERT OR IGNORE INTO timeline_frames
-                (frame_id, session_id, t, composure, gaze, head_pose, faces_detected, is_talking)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (frame_id, session_id, t, composure, gaze, head_pose,
+                 head_pose_raw, gaze_class, faces_detected, is_talking)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (frame_id, session_id, t, composure, gaze, head_pose, faces_detected, is_talking),
+            (frame_id, session_id, t, composure, gaze, head_pose,
+             head_pose_raw, gaze_class, faces_detected, is_talking),
         )
         # Keep session row alive, bump frame counter, and keep ended_at current
         conn.execute(
@@ -100,16 +153,57 @@ def insert_moment(
     type_: str,
     caption: str,
     evidence_url: str | None = None,
+    kind: str | None = None,
+    t_end: float | None = None,
+    duration_sec: float | None = None,
+    frame_count: int = 1,
 ) -> None:
-    """Insert a flagged moment into the moments table."""
+    """Insert a flagged moment into the moments table.
+
+    A moment is one EPISODE — a contiguous stretch of one flag kind — not one
+    frame. `t` is when it started, `t_end` when the behaviour last showed, and
+    `duration_sec` the difference. They are NULL on insert for an episode still
+    in progress and filled in later by close_moment(); a caller that already
+    knows the whole span (the object sweep, which bills one prop once) may pass
+    them straight in.
+
+    `kind` is the flag identity used for grouping (MOBILE_DEVICE, NO_FACE,
+    ATTENTION_DRIFT, ...). `type_` remains the intervention level, which is what
+    the replay page reads.
+    """
     with contextlib.closing(_db()) as conn, conn:
         conn.execute(
             """
             INSERT OR IGNORE INTO moments
-                (moment_id, session_id, t, type, caption, evidence_url)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (moment_id, session_id, t, type, caption, evidence_url,
+                 kind, t_end, duration_sec, frame_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (moment_id, session_id, t, type_, caption, evidence_url),
+            (moment_id, session_id, t, type_, caption, evidence_url,
+             kind, t_end, duration_sec, frame_count),
+        )
+
+
+def close_moment(
+    moment_id: str,
+    t_end: float,
+    duration_sec: float,
+    frame_count: int,
+) -> None:
+    """Stamp an episode's end onto the row opened for it.
+
+    Deliberately does NOT touch caption or evidence_url: the caption was written
+    against the frame that caused the flag and the image is that frame. An
+    episode ending changes how long it lasted, not what it was.
+    """
+    with contextlib.closing(_db()) as conn, conn:
+        conn.execute(
+            """
+            UPDATE moments
+               SET t_end = ?, duration_sec = ?, frame_count = ?
+             WHERE moment_id = ?
+            """,
+            (t_end, duration_sec, frame_count, moment_id),
         )
 
 
