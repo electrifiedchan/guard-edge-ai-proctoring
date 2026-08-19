@@ -81,8 +81,17 @@ export function buildDemoSummary(days: number): DashboardSummary {
       // fixture model a candidate the app can no longer produce — the same class
       // of mistake as the date-format copy above.
       candidate_id: "resume_demofixture0000000000000000000000000000000000000000000000000000",
-      display_name: "Aarav Sharma",
-      preferred_name: null,
+      // display_name is the candidate ID, not a name — timeline.py fills it with
+      // `resolved_candidate` (l.199, l.447) and there is no path where a real name
+      // reaches it. This fixture used to put "Aarav Sharma" here, which modelled a
+      // response the backend cannot produce: the same class of mistake as the
+      // candidate_id note above. The header no longer reads this field for a name
+      // (it was the source of the "Fahh" greeting), so a fixture that supplied one
+      // here would have hidden the bug rather than reproduced it.
+      display_name: "resume_demofixture0000000000000000000000000000000000000000000000000000",
+      // The name lives in the field that is actually a name, so ?demo=1 still
+      // renders a populated greeting for design review.
+      preferred_name: "Aarav Sharma",
     },
     // sessions must equal the sum of ACTIVITY_PLAN — the header prints this
     // count directly above the grid, so a mismatch is visible side by side.

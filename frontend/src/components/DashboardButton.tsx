@@ -2,12 +2,8 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { initialsFrom, nameFromResumeText, resolveDisplayName } from "@/lib/greeting";
-import { getActiveResume, readCache } from "@/lib/resumeMemory";
+import { readIdentity, type Identity } from "@/lib/identity";
 import { cn } from "@/lib/utils";
-
-const PREFERRED_NAME_KEY = "guard.preferredName";
-const SESSION_KEY = "guard_session";
 
 /**
  * Corner identity chip that doubles as the way back to /dashboard.
@@ -17,68 +13,11 @@ const SESSION_KEY = "guard_session";
  * account", so it needs no label to be understood, and it stops competing with
  * the primary action on pages where the real CTA is "Start a session".
  *
- * Identity comes from resolveDisplayName — the same path /sentry and /dashboard
- * use (preferred name → resume filename). Deliberately not a second
- * name-resolution implementation.
+ * Identity comes from readIdentity in @/lib/identity — the same path the
+ * dashboard header uses. That module was extracted FROM this file precisely
+ * because the header had grown a second, wrong implementation; do not inline a
+ * third one here.
  */
-
-/** localStorage/sessionStorage both throw in some private modes. */
-function safeRead(store: "local" | "session", key: string): string | null {
-  try {
-    return (store === "local" ? window.localStorage : window.sessionStorage).getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function readIdentity(): { name: string; initials: string | null } {
-  const preferred = safeRead("local", PREFERRED_NAME_KEY);
-
-  let resumeName: string | null = null;
-  let resumeText: string | null = null;
-  const session = safeRead("session", SESSION_KEY);
-  if (session) {
-    try {
-      const parsed = JSON.parse(session) as { file_name?: string; resume_text?: string };
-      resumeName = parsed.file_name ?? null;
-      resumeText = parsed.resume_text ?? null;
-    } catch {
-      // malformed session blob — fall through to the remembered resume
-    }
-  }
-
-  const remembered = getActiveResume();
-  resumeName = resumeName ?? remembered?.file_name ?? null;
-  // After a tab close there is no live session, but the parsed resume survives
-  // in the cache the pointer names — so the real name is still recoverable.
-  if (!resumeText && remembered) resumeText = readCache(remembered.hash)?.resume_text ?? null;
-
-  const cleaned = resumeName
-    ? resumeName.replace(/\.(pdf|docx?|txt)$/i, "").replace(/[_-]+/g, " ")
-    : null;
-
-  // The resume body is the only place the candidate's actual name exists —
-  // nothing upstream extracts it, and the filename is often "testresume.pdf",
-  // which is where the wrong letters came from. Filename is now the fallback.
-  const fromResume = nameFromResumeText(resumeText);
-
-  const resolved = resolveDisplayName({
-    preferredName: preferred,
-    resumeName: fromResume ?? cleaned,
-  });
-
-  // Prefer full-name initials ("Aarav Mehta" -> AM). resolveDisplayName returns
-  // only a first name, which would collapse to "AA" and lose the surname.
-  // A typed or resume-sourced name is real text, so filename-noise stripping is
-  // off for those; only the filename path needs it.
-  const initials =
-    initialsFrom(preferred, false) ??
-    initialsFrom(fromResume, false) ??
-    initialsFrom(cleaned) ??
-    initialsFrom(resolved.name, false);
-
-  return { name: resolved.name, initials: resolved.name === "there" ? null : initials };
-}
 
 export default function DashboardButton({
   className,
@@ -93,7 +32,7 @@ export default function DashboardButton({
   position?: "static" | "fixed";
 }) {
   // Storage is client-only; resolving during render would desync hydration.
-  const [identity, setIdentity] = useState<{ name: string; initials: string | null } | null>(null);
+  const [identity, setIdentity] = useState<Identity | null>(null);
 
   useEffect(() => {
     setIdentity(readIdentity());

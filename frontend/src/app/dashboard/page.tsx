@@ -8,7 +8,8 @@ import { fetchSummary, fmtDuration, TALKING_BAND } from "@/lib/dashboard";
 
 import { buildDemoSummary } from "@/lib/demoSummary";
 
-import { resolveDisplayName } from "@/lib/greeting";
+import { buildGreeting, daysSince, resolveDisplayName } from "@/lib/greeting";
+import { PREFERRED_NAME_KEY, readIdentity, type Identity } from "@/lib/identity";
 import { activeCandidateId } from "@/lib/resumeMemory";
 
 
@@ -28,7 +29,6 @@ import ModeBadge from "@/components/ModeBadge";
 
 
 const DAYS = 84;
-const PREFERRED_NAME_KEY = "guard.preferredName";
 
 
 
@@ -58,8 +58,15 @@ export default function DashboardPage() {
   // would cause a hydration mismatch and flash the fallback name.
   const [mounted, setMounted] = useState(false);
   const [storedName, setStoredName] = useState<string | null>(null);
+  const [identity, setIdentity] = useState<Identity | null>(null);
   const [confirmDismissed, setConfirmDismissed] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
+
+  // The clock is captured once, at mount, for two reasons. Date does not exist in
+  // the server pass, same as storage. And the greeting must not re-pick itself on
+  // every re-render — a heading that changes while it is being read is worse than
+  // a fixed one, which is the problem this whole change set out to solve.
+  const [clock, setClock] = useState<{ hour: number; seed: number; now: number } | null>(null);
 
   // Guided tour. useTourSeen returns null until mounted (localStorage is
   // client-only), so first-run auto-open waits for a definite false rather than
@@ -75,6 +82,17 @@ export default function DashboardPage() {
     } catch {
       // localStorage can throw in private mode — non-fatal, fall back to parsing.
     }
+    setIdentity(readIdentity());
+
+    const now = new Date();
+    setClock({
+      hour: now.getHours(),
+      now: now.getTime(),
+      // Day number since the epoch as the rotation seed: the line varies from one
+      // day to the next, but every visit within the same day gets the same one.
+      // That is the difference between a product with a voice and a slot machine.
+      seed: Math.floor(now.getTime() / 86_400_000),
+    });
   }, []);
 
   // Single fetch for the whole page. No widget fetches its own data.
@@ -128,17 +146,52 @@ export default function DashboardPage() {
   }, [tourSeen, loading, error]);
 
 
+  // resumeName comes from readIdentity, NOT from candidate.display_name. That API
+  // field carries the candidate *ID* — `resume_<hash>` — and feeding it in here is
+  // exactly what made this header address people as "Fahh": parseFirstName
+  // stripped the "resume" prefix, dropped the digits, and title-cased whichever
+  // letters the hash happened to contain. See @/lib/identity.
   const greeting = useMemo(
     () =>
       resolveDisplayName({
         preferredName: storedName ?? data?.candidate.preferred_name ?? null,
-        resumeName: data?.candidate.display_name ?? null,
+        resumeName: identity?.fullName ?? null,
       }),
-    [storedName, data],
+    [storedName, data, identity],
   );
 
-  const fullName = data?.candidate.display_name ?? greeting.name;
+  // Tooltip for the truncated first name, so a long full name stays readable on
+  // hover. Never the ID.
+  const fullName = identity?.fullName ?? greeting.name;
   const showConfirm = mounted && greeting.needsConfirm && !confirmDismissed && !storedName;
+
+  // Only print a name when it is the person's own. "Good morning, there" is worse
+  // than "Good morning" with nothing after it.
+  const showName = !greeting.isFallback;
+
+  const lead = useMemo(() => {
+    if (!clock) return null;
+
+    // Max over the list rather than recent_sessions[0]: the ordering is the API's
+    // business, and this only needs the latest timestamp in it. Comparing parsed
+    // values, not strings, so a format change upstream cannot silently reorder.
+    const last = (data?.recent_sessions ?? []).reduce<string | null>((latest, s) => {
+      if (!s.started_at) return latest;
+      if (latest === null) return s.started_at;
+      return Date.parse(s.started_at) > Date.parse(latest) ? s.started_at : latest;
+    }, null);
+
+    return buildGreeting({
+      hour: clock.hour,
+      seed: clock.seed,
+      // null, not 0, while the summary is in flight or failed — see GreetingFacts.
+      // The line opens on time-of-day and upgrades to the contextual one when the
+      // facts land, so it is never wrong, only sometimes less specific.
+      sessions: data?.totals.sessions ?? null,
+      daysSinceLast: daysSince(last, clock.now),
+      streakDays: data?.totals.current_streak_days ?? 0,
+    });
+  }, [clock, data]);
 
   const savePreferredName = () => {
     const clean = nameDraft.trim();
@@ -201,19 +254,32 @@ export default function DashboardPage() {
             <p className="text-xs uppercase tracking-[0.3em] text-emerald-400/80">
               Interview readiness
             </p>
-            <h1 className="mt-2 flex items-baseline gap-2 text-3xl font-semibold tracking-tight text-neutral-50">
-              <span className="shrink-0">Welcome back,</span>
-              {/* min-w-0 is what lets truncate actually engage: a flex child
-                  defaults to min-width:auto and refuses to shrink below its
-                  nowrap text, so at 375px this row overflowed instead of
-                  ellipsising. */}
-              {mounted ? (
-                <span className="min-w-0 max-w-[14ch] truncate text-emerald-400" title={fullName}>
-
-                  {greeting.name}
-                </span>
+            {/* The WHOLE line sits behind `mounted` now, not just the name. The
+                lead depends on the local clock, so rendering it during the server
+                pass would mismatch on hydration for every user outside the
+                server's timezone. */}
+            <h1 className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-3xl font-semibold tracking-tight text-neutral-50">
+              {mounted && lead ? (
+                <>
+                  <span className="shrink-0">{showName ? `${lead},` : lead}</span>
+                  {/* min-w-0 is what lets truncate actually engage: a flex child
+                      defaults to min-width:auto and refuses to shrink below its
+                      nowrap text, so at 375px this row overflowed instead of
+                      ellipsising. flex-wrap covers the other axis, which the fixed
+                      lead never needed — "Day 12 of the streak" plus a name is
+                      wider than one line on a phone, and wrapping reads better
+                      there than ellipsising the lead. */}
+                  {showName && (
+                    <span
+                      className="min-w-0 max-w-[14ch] truncate text-emerald-400"
+                      title={fullName}
+                    >
+                      {greeting.name}
+                    </span>
+                  )}
+                </>
               ) : (
-                <span className="h-8 w-28 animate-pulse rounded bg-neutral-800" />
+                <span className="h-8 w-64 animate-pulse rounded bg-neutral-800" />
               )}
             </h1>
 

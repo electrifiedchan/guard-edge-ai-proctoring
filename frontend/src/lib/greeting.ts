@@ -210,3 +210,137 @@ export function resolveDisplayName(input: {
 
   return { name: "there", isFallback: true, needsConfirm: false };
 }
+
+/* ------------------------------------------------------------------------- *
+ * Dynamic greeting
+ *
+ * The dashboard used to open with "Welcome back," on every visit, at every
+ * hour, whether it was the user's first session ever or their fourth today.
+ * That one fixed string is what makes a product feel unattended, and it is
+ * actively wrong on a first visit — there is no "back" to come to.
+ *
+ * The shape here is the one Gemini and ChatGPT both use: a short time-of-day
+ * lead over the first name, varied between visits so a returning user does not
+ * read the identical sentence every day. What is added for GUARD is context the
+ * dashboard already holds — a first run, a long absence, a live streak and a
+ * second session in one day are four different moments, and a practice tool
+ * that greets all four identically is not paying attention to the practice.
+ *
+ * Everything is passed in: the hour, the seed and the session facts. So these
+ * are pure functions, testable without mocking a clock (see
+ * scripts/check-greeting.mjs), and the caller resolves the inputs once after
+ * mount. That last part is not incidental — a greeting that reshuffles itself
+ * on every re-render while you are reading it is worse than a fixed one.
+ * ------------------------------------------------------------------------- */
+
+export type TimeOfDay = "morning" | "afternoon" | "evening" | "night";
+
+/**
+ * Bucket a local hour (0–23).
+ *
+ * Night is tested FIRST because it is the one bucket that wraps midnight; check
+ * it last and hour 2 falls through into "afternoon". Boundaries are uneven on
+ * purpose: morning runs to 12 because 11:30 is not afternoon to anyone, and
+ * night starts at 22 because someone practising at 23:00 is having a late night
+ * rather than an early morning.
+ */
+export function timeOfDay(hour: number): TimeOfDay {
+  if (hour >= 22 || hour < 5) return "night";
+  if (hour < 12) return "morning";
+  if (hour < 17) return "afternoon";
+  return "evening";
+}
+
+const TIME_LEADS: Record<TimeOfDay, readonly string[]> = {
+  morning: ["Good morning", "Morning", "Fresh start"],
+  afternoon: ["Good afternoon", "Afternoon"],
+  evening: ["Good evening", "Evening"],
+  night: ["Still up", "Late one", "Late session"],
+};
+
+// "Welcome back" survives here and nowhere else, because this is the only branch
+// where it is true. Kept deliberately: it was never a bad line, only a line
+// shown at the wrong times.
+const AFTER_A_GAP = ["Welcome back", "Good to see you again", "Been a while"] as const;
+const FIRST_RUN = ["Welcome", "Good to have you", "Let's set your baseline"] as const;
+const ALREADY_TODAY = ["Back for another round", "Round two", "Still at it"] as const;
+
+/** Days away before the return is worth remarking on. Below this it is just a normal visit. */
+const GAP_DAYS = 10;
+/** Two days in a row is a coincidence; three is a habit worth naming. */
+const STREAK_MIN = 3;
+
+/** Deterministic choice from a pool. A non-finite seed picks the first entry rather than `undefined`. */
+function pick(pool: readonly string[], seed: number): string {
+  const i = Number.isFinite(seed) ? Math.abs(Math.trunc(seed)) % pool.length : 0;
+  return pool[i];
+}
+
+export type GreetingFacts = {
+  /** Local hour, 0–23. */
+  hour: number;
+  /**
+   * Sessions ever recorded. 0 means this account has never run one; **null means
+   * not known yet** — the summary is still in flight or the fetch failed.
+   *
+   * The null case matters. Defaulting an unloaded summary to 0 makes every
+   * contextual branch fire on placeholder facts, so a returning user reads
+   * "Let's set your baseline" for as long as the request takes and then watches
+   * it correct itself. With no facts, the clock is the only honest answer.
+   */
+  sessions: number | null;
+  /** Whole calendar days since the last session; null when there has never been one. */
+  daysSinceLast: number | null;
+  /** Current consecutive-day streak, as the backend counts it. */
+  streakDays: number;
+  /** Rotation seed. The same seed always yields the same line. */
+  seed: number;
+};
+
+/**
+ * The greeting lead, without the name and without a trailing comma — the caller
+ * owns both, because it styles the name separately and must not print a dangling
+ * comma when there is no name to follow it.
+ */
+export function buildGreeting(facts: GreetingFacts): string {
+  const { hour, sessions, daysSinceLast, streakDays, seed } = facts;
+
+  // Order IS the design. Each branch is a claim that this fact is the most
+  // interesting thing about this visit; the clock is what is left when none of
+  // them is — or when nothing is known yet. Note that a streak-holder who has
+  // already practised today gets "Back for another round" rather than "Day 5":
+  // they know it is day 5, they just finished it.
+  if (sessions === null) return pick(TIME_LEADS[timeOfDay(hour)], seed);
+  if (sessions === 0) return pick(FIRST_RUN, seed);
+  if (daysSinceLast !== null && daysSinceLast >= GAP_DAYS) return pick(AFTER_A_GAP, seed);
+  if (daysSinceLast === 0) return pick(ALREADY_TODAY, seed);
+  if (streakDays >= STREAK_MIN) {
+    return pick([`Day ${streakDays} of the streak`, `${streakDays} days running`], seed);
+  }
+  return pick(TIME_LEADS[timeOfDay(hour)], seed);
+}
+
+/**
+ * Whole *calendar* days between an ISO timestamp and `now`, or null if absent
+ * or unparseable.
+ *
+ * Calendar days rather than elapsed 24-hour blocks, because the caller uses 0 to
+ * mean "already practised today": a session at 23:00 last night and a visit at
+ * 01:00 tonight are two hours apart but are yesterday and today to the user.
+ * Rounding rather than flooring the division absorbs the 23- and 25-hour days
+ * that daylight-saving transitions produce.
+ */
+export function daysSince(iso: string | null | undefined, now: number): number | null {
+  if (!iso) return null;
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) return null;
+
+  const midnight = (t: number) => {
+    const d = new Date(t);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  };
+  // Clamped at 0: a clock skew that puts the last session in the future must not
+  // produce a negative count, which would read as neither "today" nor "a gap".
+  return Math.max(0, Math.round((midnight(now) - midnight(then)) / 86_400_000));
+}
