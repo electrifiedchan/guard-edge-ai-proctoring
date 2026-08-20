@@ -1207,9 +1207,12 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
         canvas.width = 640;
         canvas.height = 360;
         ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, 0, 0, 640, 360);
-        // 0.6 quality vs the main loop's 0.8: YOLO only needs the shape, and
-        // this keeps 4x the cadence from costing 4x the bandwidth.
-        const b64 = canvas.toDataURL("image/jpeg", 0.6).split(",")[1];
+        // 0.8 quality, matching the main loop. 0.6 was chosen to keep 4x the
+        // cadence from costing 4x the bandwidth — but it smeared a dark phone on
+        // a dark shirt below YOLO's confidence floor (measured 0.185 vs a 0.20
+        // gate at q0.6; 0.258 at q0.8), turning a real detection into a miss that
+        // read as a 5s delay. At 640x360 the extra bytes are worth the recall.
+        const b64 = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
 
         try {
           const controller = new AbortController();
@@ -1346,9 +1349,15 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
         )}
       </AnimatePresence>
 
-      {/* LEFT — Camera frame */}
+      {/* LEFT — Camera frame.
+          aspect-video (16:9) matches the 1280x720 camera exactly, so the
+          object-cover below is a no-op and the preview shows the SAME pixels
+          the backend analyses. A fixed height (was h-[380px]) rendered a ~2.49
+          box, and object-cover then cropped ~103px off the top and bottom —
+          hiding a band that YOLO still received, so a phone held low could be
+          flagged with nothing on screen to explain it. */}
       <div
-        className={`relative w-full h-[380px] rounded-lg overflow-hidden flex-shrink-0 lift-1 haze transition-shadow ${
+        className={`relative w-full aspect-video rounded-lg overflow-hidden flex-shrink-0 lift-1 haze transition-shadow ${
           sysStatus === "ACTIVE" ? "ring-signal" : ""
         }`}
       >
