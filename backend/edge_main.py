@@ -284,13 +284,18 @@ def determine_verdict(detected_objects: list, faces: int, talking: bool, head_po
                 "text": f"Attention drift detected: {pose_narration}.",
             })
 
-    if talking:
-        flags.append({
-            "kind": "SPEECH",
-            "critical": False,
-            "critical_kind": None,
-            "text": "Verbal activity detected — possible earpiece coaching.",
-        })
+    # Talking used to raise a SPEECH flag reading "possible earpiece coaching."
+    # It fired on the mouth moving and nothing else — and this path has nothing
+    # else to go on: the transcript that could tell coaching from a normal answer
+    # lives on the conversation turn (process_candidate_turn), not here. So the
+    # flag was a guess dressed as a finding, and in every recorded session it was
+    # the candidate answering the question out loud. It never once coincided with
+    # a phone or a second person, the two things it was meant to corroborate.
+    #
+    # `talking` stays in the telemetry (timeline_frames.is_talking) and in the
+    # logic trace below as neutral fact; what is gone is the alarm. The honest
+    # earpiece signal — an answer that is OFF-TOPIC for the question asked — can
+    # only be judged where the transcript is, so it belongs on the turn path.
 
     criticals = [f for f in flags if f["critical"]]
     is_critical = bool(criticals)

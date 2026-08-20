@@ -144,25 +144,35 @@ def test_a_phone_no_longer_silences_the_head_turn():
     print("PASS a phone and a head turn are reported as two concurrent flags")
 
 
-def test_talking_is_reported_alongside_a_critical():
-    """`talking and not is_critical` meant speech was suppressed by any critical —
-    an earpiece is most interesting exactly when something else is also wrong."""
-    kinds = _flag_kinds("HEAD_CENTER", faces=2, talking=True)
-    assert kinds == ["MULTIPLE_FACES", "SPEECH"], (
-        f"speech was silenced by the face critical: {kinds!r}"
+def test_talking_alone_raises_no_flag():
+    """Verbal activity is not evidence of anything on this path.
+
+    The frame path knows only that the mouth moved — not what was said. It used
+    to turn that single bit into a SPEECH flag reading "possible earpiece
+    coaching", which fired on a candidate simply answering the question out loud.
+    Talking is now neutral: it stays in the telemetry and the logic trace, but
+    raises no flag. A critical present at the same time is reported on its own.
+    The off-topic judgment that CAN implicate an earpiece needs the transcript
+    and so lives on the conversation turn, not here."""
+    assert _flag_kinds("HEAD_CENTER", talking=True) == [], (
+        f"talking alone should raise nothing, got {_flag_kinds('HEAD_CENTER', talking=True)!r}"
     )
-    print("PASS speech is reported even when a critical is live")
+    kinds = _flag_kinds("HEAD_CENTER", faces=2, talking=True)
+    assert kinds == ["MULTIPLE_FACES"], (
+        f"talking should add no flag beside the face critical: {kinds!r}"
+    )
+    print("PASS talking alone raises no flag")
 
 
 def test_every_concurrent_condition_appears_once():
     kinds = _flag_kinds(
         "GAZE_DOWN", objects=["cell phone (88%)", "book (74%)"], talking=True
     )
-    assert kinds == ["MOBILE_DEVICE", "PROHIBITED_ITEM", "ATTENTION_DRIFT", "SPEECH"], (
+    assert kinds == ["MOBILE_DEVICE", "PROHIBITED_ITEM", "ATTENTION_DRIFT"], (
         f"unexpected flag set: {kinds!r}"
     )
     assert len(kinds) == len(set(kinds)), f"a condition was double-billed: {kinds!r}"
-    print("PASS four simultaneous conditions each produce exactly one flag")
+    print("PASS three simultaneous conditions each produce exactly one flag")
 
 
 def test_only_one_critical_kind_is_returned():
@@ -308,7 +318,7 @@ if __name__ == "__main__":
     test_drift_is_a_warning_not_a_critical()
     test_centre_is_clean_and_objects_still_outrank_pose()
     test_a_phone_no_longer_silences_the_head_turn()
-    test_talking_is_reported_alongside_a_critical()
+    test_talking_alone_raises_no_flag()
     test_every_concurrent_condition_appears_once()
     test_only_one_critical_kind_is_returned()
     test_pose_is_not_trusted_without_exactly_one_face()
