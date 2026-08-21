@@ -92,6 +92,12 @@ frontend/public/mediapipe/
 # part of the shipped product and should never be committed.
 /FOR CONFERENCE PAPER/
 
+# ─── Viva / presentation material ────────────────────────────────────────────
+# Slide decks and the defense-prep guides we read before a viva. Written for us,
+# not for anyone reading the repo, and they describe the project rather than
+# building it. Leading slash so it cannot match anything deeper in the tree.
+/presentation/
+
 # ─── Tool output / generated artifacts ───────────────────────────────────────
 /.kilo/
 
