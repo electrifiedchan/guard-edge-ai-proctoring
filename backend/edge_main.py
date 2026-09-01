@@ -145,6 +145,12 @@ YOLO_CONF = float(os.getenv("BEA_YOLO_CONF", "0.35"))
 # before escalating so a weak one-frame box cannot become an accusation.
 PHONE_LOWER_CONF = float(os.getenv("BEA_PHONE_LOWER_CONF", "0.20"))
 PHONE_LOWER_CONFIRMATIONS = int(os.getenv("BEA_PHONE_LOWER_CONFIRMATIONS", "2"))
+# The full-frame pass fires at the higher YOLO_CONF floor, but one frame at that
+# floor is still not proof: at 0.35 an over-ear headphone cup, a cable, or a
+# mirror reflection can score as a phone for a single blurry frame. Requiring the
+# same two consecutive sweeps the lower pass uses means a real phone (which stays
+# in shot) still flags in ~2 sweeps, while a one-frame ghost never gets a second.
+PHONE_FULL_CONFIRMATIONS = int(os.getenv("BEA_PHONE_FULL_CONFIRMATIONS", "2"))
 
 logger.info(f"🔫 YOLOv8s loaded on {device.upper()} | classes={YOLO_WATCH_CLASSES} conf={YOLO_CONF}")
 
@@ -201,7 +207,13 @@ def classify_pose(head_pose: str) -> tuple[str, str | None]:
     return "STRAIGHT", None
 
 
-def determine_verdict(detected_objects: list, faces: int, talking: bool, head_pose: str):
+def determine_verdict(
+    detected_objects: list,
+    faces: int,
+    talking: bool,
+    head_pose: str,
+    eyes_open: bool = True,
+):
     """Returns (gaze, is_critical, critical_kind, verdict, logic_trace, flags).
 
     Every condition is now tested INDEPENDENTLY and all of them are reported.
@@ -275,14 +287,31 @@ def determine_verdict(detected_objects: list, faces: int, talking: bool, head_po
     # the fused label describes whichever face MediaPipe happened to rank first.
     gaze = "STRAIGHT"
     if faces == 1:
-        gaze, pose_narration = classify_pose(head_pose)
-        if pose_narration:
+        if not eyes_open:
+            # Eyes shut, and sustained — the client only reports closed after a
+            # 1.5s majority, so this is not a blink. A candidate with their eyes
+            # closed is not visually engaged with the screen, which is the exact
+            # frame that used to read as "fully engaged and attentive": one face,
+            # head centred, nothing in shot. It is an attention lapse, not a
+            # cheating critical, so it rides the same non-critical DOWN track as a
+            # gaze drift — risk accrues only if the closure is held across the
+            # BEA's soft/warn/hard thresholds, never on a single sample.
+            gaze = "DOWN"
             flags.append({
-                "kind": "ATTENTION_DRIFT",
+                "kind": "EYES_CLOSED",
                 "critical": False,
                 "critical_kind": None,
-                "text": f"Attention drift detected: {pose_narration}.",
+                "text": "Candidate's eyes are closed — not visually engaged.",
             })
+        else:
+            gaze, pose_narration = classify_pose(head_pose)
+            if pose_narration:
+                flags.append({
+                    "kind": "ATTENTION_DRIFT",
+                    "critical": False,
+                    "critical_kind": None,
+                    "text": f"Attention drift detected: {pose_narration}.",
+                })
 
     # Talking used to raise a SPEECH flag reading "possible earpiece coaching."
     # It fired on the mouth moving and nothing else — and this path has nothing
@@ -374,6 +403,11 @@ class FramePayload(BaseModel):
     gaze_vector: list[float] | None = None
     # Optional: frontend may pass the active session_id once sessions are wired
     session_id: str | None = None
+    # Whether the candidate's eyes are open, smoothed client-side over a 1.5s
+    # window so an ordinary blink never reads as closed. Defaults True so older
+    # clients that never send it are treated as eyes-open — no false attention
+    # flags on a payload that simply predates this signal.
+    eyes_open: bool = True
 
 
 # Collapses the per-frame flag stream into one record per contiguous stretch.
@@ -445,6 +479,7 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
         faces=payload.faces_detected,
         talking=payload.is_talking,
         head_pose=payload.head_pose,
+        eyes_open=payload.eyes_open,
     )
 
     # --- PHASE 4: BEA temporal graph ---
@@ -642,6 +677,7 @@ _prop_seen: dict[str, bool] = {}
 PROP_CLEAR_SWEEPS = int(os.getenv("BEA_PROP_CLEAR_SWEEPS", "3"))
 _prop_clear_streak: dict[str, int] = {}
 _phone_lower_streak: dict[str, int] = {}
+_phone_full_streak: dict[str, int] = {}
 
 # A SECOND tracker, deliberately not the telemetry one.
 #
@@ -720,16 +756,25 @@ async def scan_objects(payload: ObjectScanPayload, background_tasks: BackgroundT
     detected_objects = _detect_objects(
         full_results, yolo_model_prop.names, min_conf=YOLO_CONF
     )
+    full_phone_detected = any("cell phone" in o.lower() for o in detected_objects)
     lower_phone_detected = any(
         "cell phone" in label.lower()
         for label in _detect_objects(
             lower_results, yolo_model_prop.names, min_conf=PHONE_LOWER_CONF
         )
     )
+    # Both phone passes require the SAME phone on two consecutive sweeps before
+    # escalating. A phone actually in shot clears that in ~2 sweeps and then stays
+    # flagged; a single frame at the confidence floor — a headphone cup, a cable,
+    # a reflection — never gets a second sweep to agree, so it can no longer open a
+    # permanent violation on its own. Either streak resets to 0 on a clean sweep,
+    # so the two sightings must be genuinely consecutive, not merely two-in-a-run.
+    full_streak = _phone_full_streak.get(bea_key, 0)
+    _phone_full_streak[bea_key] = full_streak + 1 if full_phone_detected else 0
     lower_streak = _phone_lower_streak.get(bea_key, 0)
     _phone_lower_streak[bea_key] = lower_streak + 1 if lower_phone_detected else 0
 
-    if any("cell phone" in o.lower() for o in detected_objects):
+    if _phone_full_streak[bea_key] >= PHONE_FULL_CONFIRMATIONS:
         verdict = "CRITICAL: Mobile device detected in frame."
     elif _phone_lower_streak[bea_key] >= PHONE_LOWER_CONFIRMATIONS:
         verdict = "CRITICAL: Mobile device detected in lower camera field."
@@ -1360,6 +1405,7 @@ async def reset_session(candidate_id: str):
     _prop_seen.pop(candidate_id, None)
     _prop_clear_streak.pop(candidate_id, None)
     _phone_lower_streak.pop(candidate_id, None)
+    _phone_full_streak.pop(candidate_id, None)
     # Drop open episodes rather than closing them. "Clear memory" means the run
     # is being discarded, so writing an end time and duration for a stretch the
     # user just erased would leave a finished-looking row pointing at a session

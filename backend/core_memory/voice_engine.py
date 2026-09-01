@@ -66,18 +66,28 @@ def transcribe_audio(file_path: str) -> str:
         text = " ".join(s.text.strip() for s in segments).strip()
         return text, info
 
-    transcript, info = _run(vad_filter=True)
+    try:
+        transcript, info = _run(vad_filter=True)
 
-    # The VAD is tuned for sparse audio, and on a quiet mic or a soft speaker it
-    # classifies the entire clip as silence — the request then succeeds with an
-    # empty transcript, which the caller cannot tell apart from a candidate who
-    # said nothing. Whisper on the raw waveform is slower but makes no such
-    # call, so it earns one retry before we report silence.
-    if not transcript:
-        logger.warning(
-            f"🎙️  VAD found no speech in {info.duration:.1f}s — retrying unfiltered."
-        )
-        transcript, info = _run(vad_filter=False)
+        # The VAD is tuned for sparse audio, and on a quiet mic or a soft speaker
+        # it classifies the entire clip as silence — the request then succeeds
+        # with an empty transcript, which the caller cannot tell apart from a
+        # candidate who said nothing. Whisper on the raw waveform is slower but
+        # makes no such call, so it earns one retry before we report silence.
+        if not transcript:
+            logger.warning(
+                f"🎙️  VAD found no speech in {info.duration:.1f}s — retrying unfiltered."
+            )
+            transcript, info = _run(vad_filter=False)
+    except Exception as e:
+        # A browser MediaRecorder clip whose final WebM cluster never flushed
+        # decodes to AVERROR_INVALIDDATA (errno 1094995529). That is a broken
+        # container, not a broken server — the candidate simply has no
+        # transcribable audio in this clip. Reporting silence lets the interview
+        # loop re-ask the standing question, whereas raising would surface a 500
+        # that the frontend turns into a dropped turn and a dead conversation.
+        logger.warning(f"🎙️  Could not decode audio ({e}) — treating as silence.")
+        return ""
 
     logger.info(
         f"🎙️  Transcribed {info.duration:.1f}s audio → {len(transcript)} chars "

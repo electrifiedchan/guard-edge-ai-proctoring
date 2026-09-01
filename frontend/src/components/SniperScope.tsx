@@ -170,6 +170,9 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
     // The two pre-fusion channels, smoothed the same way as stable_pose.
     stable_head_pose_raw: "HEAD_CENTER" as string | null,
     stable_gaze_class: "unknown" as string | null,
+    // Whether the candidate's eyes are open. Defaults open: an absent reading is
+    // not evidence of closure, and no-face is already its own separate critical.
+    eyes_open: true,
   });
   const gatekeeperRef = useRef<{ camera: any; faceMesh: any } | null>(null);
 
@@ -191,6 +194,10 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
   // smoothed — the fused channel would win an unfair comparison.
   const headWindowRef = useRef<{ t: number; pose: string }[]>([]);
   const gazeWindowRef = useRef<{ t: number; pose: string }[]>([]);
+  // Eye open/closed, smoothed exactly like the pose channels. A blink is a few
+  // frames out of the 1.5s window and never clears the >50% majority stableOver
+  // demands, so this reports CLOSED only for a sustained shut — never a blink.
+  const eyesWindowRef = useRef<{ t: number; pose: string }[]>([]);
   const POSE_WINDOW_MS = 1500;
   const POSE_MIN_SAMPLES = 3;
 
@@ -545,10 +552,33 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
       // types stable.
       let headPoseRaw = "HEAD_CENTER";
       let gazeClass = "unknown";
+      // Eyelids open? Hoisted like the pose channels so a sustained closure can
+      // be forwarded to the backend. Defaults open: with no face there are no
+      // eyelids to measure, and that frame is already the NO_FACE critical.
+      let eyesOpen = true;
 
       if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-        faces = results.multiFaceLandmarks.length;
-        
+        // Size-gate the face count. MediaPipe fits a full mesh to ANY face it
+        // finds — a bystander's partial face at the edge of frame, or someone
+        // several feet behind the candidate — and the old count treated those
+        // identically to a second person sitting shoulder-to-shoulder. A genuine
+        // second candidate is about as close, and therefore about as large, as
+        // the primary; a background face is smaller. Counting only faces at least
+        // half the height of the largest one keeps the real second person and
+        // drops the passer-by. Both heights scale together as the candidate moves
+        // toward or away from the lens, so the ratio holds at any sitting
+        // distance. (A same-size face at the frame edge is a real second person
+        // and still counts — which is correct.)
+        const SECONDARY_FACE_MIN_RATIO = 0.5;
+        const faceHeights = results.multiFaceLandmarks.map((lm: Array<{ y: number }>) =>
+          Math.abs((lm[152]?.y ?? 0) - (lm[10]?.y ?? 0))
+        );
+        const maxFaceH = Math.max(...faceHeights);
+        faces =
+          maxFaceH > 1e-6
+            ? faceHeights.filter((h: number) => h >= maxFaceH * SECONDARY_FACE_MIN_RATIO).length
+            : results.multiFaceLandmarks.length;
+
         if (faces > 1) {
           console.warn("🚨 CPU GATEKEEPER: Multiple Faces Detected.");
         }
@@ -736,7 +766,7 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
         const lEAR = lOk ? dist(lTop, lBottom) / lWidth : 0;
         const rEAR = rOk ? dist(rTop, rBottom) / rWidth : 0;
         const openCount = (lEAR > EAR_OPEN ? 1 : 0) + (rEAR > EAR_OPEN ? 1 : 0);
-        const eyesOpen = openCount > 0;
+        eyesOpen = openCount > 0;
 
 
         // === CALIBRATION GAZE SAMPLES ===
@@ -858,6 +888,10 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
         // measured the same way.
         stable_head_pose_raw: stableOver(headWindowRef, headPoseRaw, now),
         stable_gaze_class: stableOver(gazeWindowRef, gazeClass, now),
+        // Modal eye state across the trailing window. stableOver returns null
+        // until the window agrees, so "not yet decided" and "OPEN" both read as
+        // open — only a sustained, corroborated closure reports eyes shut.
+        eyes_open: stableOver(eyesWindowRef, eyesOpen ? "OPEN" : "CLOSED", now) !== "CLOSED",
       };
     });
 
@@ -1085,7 +1119,8 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
         head_pose: pose,
         head_pose_raw: headPoseRaw,
         gaze_class: gazeClass,
-        gaze_vector: telemetryRef.current.gaze_vector
+        gaze_vector: telemetryRef.current.gaze_vector,
+        eyes_open: telemetryRef.current.eyes_open,
       });
 
       if (calibrationRef.current.isCalibrating) {
@@ -1112,7 +1147,8 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
             head_pose: pose,
             head_pose_raw: headPoseRaw,
             gaze_class: gazeClass,
-            gaze_vector: telemetryRef.current.gaze_vector
+            gaze_vector: telemetryRef.current.gaze_vector,
+            eyes_open: telemetryRef.current.eyes_open
           })
         });
         clearTimeout(timeoutId);

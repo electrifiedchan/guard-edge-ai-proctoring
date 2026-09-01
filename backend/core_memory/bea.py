@@ -41,6 +41,22 @@ TIER_HARD_PENALTY = 100
 # still happens at the thresholds, only the displayed number moves continuously.
 PROGRESSIVE_RISK = os.getenv("BEA_PROGRESSIVE_RISK", "1") != "0"
 
+# How long a CONFIRMED critical keeps the LIVE risk meter pinned at 100 after it
+# was last seen. This governs ONLY the live composure number; the permanent
+# record — critical_flags, peak_risk, the autopsy rows — is never touched by it.
+#
+# It exists because the pin used to be permanent. `_calculate_risk` forced risk
+# to 100 whenever critical_flags was non-empty, and that list is only ever
+# emptied by a full reset. The BEA identity is a stable resume_<hash> that
+# outlives page reloads, so a SINGLE transient critical — a false phone box, a
+# bystander's face at the frame edge, or the two or three no-face frames every
+# camera emits before it acquires the candidate at Engage — latched the meter at
+# COMPOSURE 0% / SEVERE for the rest of the run AND every later run under that
+# resume, until the user manually hit "Clear memory". An actively-ongoing
+# condition (a second face still in shot) stays pinned regardless of this window;
+# what decays is only the TAIL after the evidence has gone.
+CRITICAL_HOLD_SEC = float(os.getenv("BEA_CRITICAL_HOLD_SEC", "30"))
+
 
 class BehavioralEventAccumulator:
     def __init__(self, window_size_seconds: int = 300):
@@ -80,6 +96,10 @@ class BehavioralEventAccumulator:
             # forgot. This is the number the report quotes.
             "peak_risk": 0,
             "peak_risk_at": None,
+            # Wall-clock of the most recent CONFIRMED critical. The LIVE risk pin
+            # keys off this (see _calculate_risk) so a past incident stops forcing
+            # 100% once it has aged past CRITICAL_HOLD_SEC. None = none yet.
+            "last_critical_at": None,
         }
 
     async def _ensure_candidate(self, candidate_id: str):
@@ -210,13 +230,18 @@ class BehavioralEventAccumulator:
         async with self.lock:
             await self._ensure_candidate(candidate_id)
             state = self.memory[candidate_id]
-            state["last_activity"] = time.time()
+            now = time.time()
+            state["last_activity"] = now
 
             if reason and reason not in state["critical_flags"]:
                 state["critical_flags"].append(reason)
 
             # Counts as a hard event so risk stays elevated after the object leaves.
-            state["events"].append(time.time())
+            state["events"].append(now)
+            # Arms the live risk pin. Risk is held at 100 for CRITICAL_HOLD_SEC
+            # from here; a phone re-sighted or a face incident that keeps
+            # re-confirming refreshes it, while a one-off blip is allowed to cool.
+            state["last_critical_at"] = now
 
             return self._stamp_peak(candidate_id, {
                 "candidate_id": candidate_id,
@@ -422,11 +447,30 @@ class BehavioralEventAccumulator:
         count = len(events)
         risk_score = min(count * 20, 100)
 
-        # A confirmed critical flag is objective evidence, not a transient
-        # telemetry tier. Do not let the next clean gaze frame make a phone
-        # incident appear as a 20% or 40% session in the live panel or verdict.
-        if self.memory.get(candidate_id, {}).get("critical_flags"):
-            risk_score = 100
+        # A confirmed critical is objective evidence, not a transient telemetry
+        # tier, so the live meter is pinned at 100 while the critical is ACTIVE
+        # (a second face / no face right now) or was seen within the last
+        # CRITICAL_HOLD_SEC — one clean gaze frame must not repaint a phone
+        # incident as a 20% session.
+        #
+        # It must NOT pin forever, which is what keying off `critical_flags`
+        # (a permanent, reset-only list) did: one warm-up false positive read as
+        # SEVERE / COMPOSURE 0% for the whole run and every run after it. The
+        # permanent record stays permanent — peak_risk still ratchets to 100 and
+        # the flag is still on the verdict — but the LIVE number now recovers.
+        state = self.memory.get(candidate_id, {})
+        if state.get("critical_flags"):
+            active_critical = (
+                state.get("multiple_faces_confirmed")
+                or state.get("no_face_confirmed")
+            )
+            last_crit = state.get("last_critical_at")
+            recently_critical = (
+                last_crit is not None
+                and current_time - last_crit < CRITICAL_HOLD_SEC
+            )
+            if active_critical or recently_critical:
+                risk_score = 100
 
         recent_burst = len([t for t in events if current_time - t < 30])
         if recent_burst >= 3:
