@@ -63,6 +63,13 @@ desktop.ini
 *.log
 logs/
 
+# Transcript written by setup.ps1 on every run. It records the machine it ran
+# on — paths, GPU model, package versions — and is the file a user is asked to
+# send back when setup fails. Not source, and not the same shape twice, so it
+# would collide on every pull. Named explicitly because `*.log` above does not
+# match a `.txt` extension.
+setup-log.txt
+
 # ─── Ollama / AI model weights ───────────────────────────────────────────────
 *.gguf
 *.bin
@@ -91,6 +98,11 @@ frontend/public/mediapipe/
 # LaTeX sources, benchmarks, and build artifacts for the academic paper. Not
 # part of the shipped product and should never be committed.
 /FOR CONFERENCE PAPER/
+
+# Working notes aimed at rewriting the paper — they quote reviewer wording and
+# our own unpublished framing, so they belong with the paper sources above
+# rather than in a repo someone else clones to run the app.
+/paper-revision-prompt.md
 
 # ─── Viva / presentation material ────────────────────────────────────────────
 # Slide decks and the defense-prep guides we read before a viva. Written for us,
