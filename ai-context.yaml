@@ -2,25 +2,44 @@ name: "guard-edge-ai-proctoring"
 description: "AI Proctoring System using Next.js, FastAPI, MediaPipe Face Tracking, and YOLOv8s Object Detection"
 stack:
   frontend:
-    framework: "Next.js 15 (Turbopack, App Router)"
+    framework: "Next.js 16 (App Router, Turbopack)"
+    react: "19.2.4"
     styling: "Tailwind CSS"
     language: "TypeScript"
-    key_features: "MediaPipe FaceMesh (CDN loaded, manual requestAnimationFrame loop), Framer Motion"
+    # MediaPipe is vendored, NOT loaded from a CDN: scripts/copy-mediapipe.mjs
+    # copies the FaceMesh assets out of node_modules into public/mediapipe at
+    # predev/prebuild, and locateFile points there. This is what makes offline
+    # ("Sovereign") mode actually offline, so do not reintroduce a CDN URL.
+    key_features: "MediaPipe FaceMesh (vendored to public/mediapipe, manual requestAnimationFrame loop), Framer Motion"
     port: 3000
     location: "./frontend"
   backend:
     framework: "FastAPI"
-    language: "Python 3.10+"
+    language: "Python 3.10 (3.11/3.12 also work)"
     server: "Uvicorn"
-    ai_models: "YOLOv8s for Object Detection, Ollama/Nvidia NIM for VLM-Hybrid Evaluation"
-    database: "SQLite (sentry_logs.db)"
+    ai_models: "YOLOv8s for Object Detection; Ollama (local) plus NVIDIA NIM and Groq (cloud) for LLM evaluation, selected by llm_config.py"
+    database: "SQLite (backend/sentry_logs.db for logs, backend/guard_telemetry.db for the session timeline)"
     port: 8080
     location: "./backend"
 core_logic:
-  - "Frontend captures webcam frames and uses MediaPipe to send telemetry (faces_detected, is_talking, head_pose) along with a scaled base64 image to the backend."
+  - "Frontend captures webcam frames and uses MediaPipe to send telemetry (faces_detected, is_talking, head_pose, eyes_open) along with a scaled base64 image to the backend."
   - "Backend decodes image to numpy array. Runs YOLOv8s to detect phones/people."
   - "An LLM (evaluator) receives YOLO detected objects and MediaPipe telemetry to determine a verdict and risk score."
-  - "Frontend loop is self-healing: waits for readyState >= 3 and faceMesh.onload before triggering 5s inference loop."
+  - "Frontend loop is self-healing: waits for readyState >= 3 and faceMesh.onload before triggering the 2s inference loop (TELEMETRY_INTERVAL_MS), which reschedules itself with setTimeout rather than running on a fixed interval."
+  - "Camera and microphone are captured in the browser via getUserMedia. Python never opens a capture device."
+  - "The LLM call cascades: the chosen cloud provider's primary model, then its same-vendor standby, then the other keyed cloud, then local Ollama. A failed model is skipped for 90s (see conversation_engine.py) so a dead primary does not cost a timeout every turn."
+# Run everything from the REPOSITORY ROOT. Two things depend on it: the venv
+# lives at ./venv (not ./backend/.venv, which is a leftover), and
+# edge_main.py calls YOLO("yolov8s.pt") as a path relative to the working
+# directory, so the weights only resolve when the root is the cwd.
 important_commands:
+  setup_first_time: "setup.bat"
+  run_everything: "startapp.bat"
   frontend_dev: "cd frontend && pnpm dev"
-  backend_dev: "cd backend && .\.venv\Scripts\python.exe -m uvicorn edge_main:app --port 8080 --reload"
+  # Mirrors what startapp.bat does. DISABLE_VOICE_ENGINE=true keeps the
+  # server-side pyttsx3 engine out of the way; speech is done in the browser.
+  backend_dev: "venv\\Scripts\\activate && set DISABLE_VOICE_ENGINE=true && python backend\\edge_main.py"
+  test_llm_config: "venv\\Scripts\\python.exe backend\\test_llm_config.py"
+notes:
+  - "The frontend uses pnpm. pnpm-lock.yaml is the committed lockfile; npm resolves a different tree than the one that was tested."
+  - "backend/.venv is an unused leftover. The venv this project runs on is ./venv."
