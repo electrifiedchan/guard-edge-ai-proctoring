@@ -392,19 +392,19 @@ export default function UploadPage() {
             className="w-full flex flex-col items-center gap-6"
           >
             <div className="flex items-center gap-3">
-              <FileText size={18} className="text-[var(--color-signal)]" />
-              <span className="text-sm font-medium text-[var(--color-snow)]">{fileName}</span>
+              <FileText size={22} className="text-[var(--color-signal)]" />
+              <span className="text-base font-medium text-[var(--color-snow)]">{fileName}</span>
             </div>
 
-            <div className="w-full max-w-[360px] flex flex-col gap-3">
+            <div className="w-full max-w-[420px] flex flex-col gap-3.5">
               {LOADING_MESSAGES.map((msg, i) => (
                 <div
                   key={i}
-                  className={`flex items-center gap-2.5 text-[12px] font-mono transition-all duration-300 ${
+                  className={`flex items-center gap-3 text-[14px] font-mono transition-all duration-300 ${
                     i <= loadingStep ? "text-[var(--color-signal)]" : "text-[var(--color-slate)]/40"
                   }`}
                 >
-                  <span className={`w-1.5 h-1.5 rounded-full transition-colors ${
+                  <span className={`w-2 h-2 rounded-full transition-colors ${
                     i < loadingStep
                       ? "bg-[var(--color-signal)]"
                       : i === loadingStep
@@ -416,9 +416,9 @@ export default function UploadPage() {
               ))}
             </div>
 
-            <div className="flex items-center gap-2 mt-4">
-              <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-signal)] pulse-signal" />
-              <span className="text-[11px] text-[var(--color-slate)] uppercase tracking-wider">
+            <div className="flex items-center gap-2.5 mt-4">
+              <span className="w-2 h-2 rounded-full bg-[var(--color-signal)] pulse-signal" />
+              <span className="text-[13px] text-[var(--color-slate)] uppercase tracking-wider">
                 Processing on edge
               </span>
             </div>
