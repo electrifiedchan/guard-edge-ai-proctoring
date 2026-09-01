@@ -34,6 +34,7 @@ import {
   Loader2,
   Pill,
   ShieldAlert,
+  WifiOff,
   X,
 } from "lucide-react";
 import {
@@ -47,9 +48,14 @@ const FOCUS_RING =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60 focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950";
 
 /** Fallbacks for when the backend is unreachable and status never arrived —
- *  the instructions are still the most useful thing on screen at that point. */
+ *  the instructions are still the most useful thing on screen at that point.
+ *
+ *  Both point at a key-management page rather than a model page. The NVIDIA one
+ *  used to link to a specific model (mistral-nemotron) and went stale as soon as
+ *  the backend switched models; the account-level keys page cannot rot that way.
+ *  Keep these in sync with CLOUD_PROVIDERS[...]["console"] in llm_config.py. */
 const CONSOLES: Record<CloudProvider, string> = {
-  nvidia: "https://build.nvidia.com/meta/llama-3_1-8b-instruct",
+  nvidia: "https://build.nvidia.com/settings/api-keys",
   groq: "https://console.groq.com/keys",
 };
 
@@ -57,8 +63,8 @@ const PROVIDER_ORDER: CloudProvider[] = ["nvidia", "groq"];
 
 const PROVIDER_STEPS: Record<CloudProvider, string[]> = {
   nvidia: [
-    "Open the NVIDIA model page and sign in — free, no card.",
-    'Click "Get API Key" in the top right of the code panel.',
+    "Open the NVIDIA API keys page and sign in — free, no card.",
+    'Click "Generate API Key" — any name works.',
     "Copy the key. It starts with nvapi-.",
   ],
   groq: [
@@ -197,6 +203,7 @@ export function CloudSetup({
   status,
   initialProvider,
   onSaved,
+  onRecheck,
   onCommit,
   committing,
   onClose,
@@ -204,6 +211,8 @@ export function CloudSetup({
   status: LlmStatus | null;
   initialProvider: CloudProvider;
   onSaved: (next: LlmStatus) => void;
+  /** Re-probe the network so the flag reflects now, not when the page loaded. */
+  onRecheck: () => Promise<void>;
   /** Take the pill from in here, on the tab the user is looking at. */
   onCommit: (provider: CloudProvider) => void;
   committing: boolean;
@@ -217,12 +226,17 @@ export function CloudSetup({
   /* Set when the user chooses to overwrite a key that is already installed, so
      the field appears in place of the "configured" summary. */
   const [replacing, setReplacing] = useState(false);
+  const [rechecking, setRechecking] = useState(false);
 
   const info = status?.providers?.[tab];
   const consoleUrl = info?.console ?? CONSOLES[tab];
   const configured = Boolean(info?.configured) && !replacing;
   const guessed = detectProvider(key);
   const mismatch = guessed !== null && guessed !== tab;
+  // Only a *positive* offline reading trips the flag: a null status (backend not
+  // answering yet) is a different failure with its own copy, so it must not read
+  // as "no network" here.
+  const offline = status ? status.cloudReachable === false : false;
 
   const submit = useCallback(async () => {
     if (busy || !key.trim()) return;
@@ -255,6 +269,44 @@ export function CloudSetup({
         Both of these are free and neither asks for a card. Pick whichever you
         already have an account with.
       </p>
+
+      {/* The failure this page exists to prevent, for the online pill: a key is
+          set, the pill commits, and the first interview question is the first
+          time anyone learns the machine is offline. Surfaced here, above the key
+          steps, with a live re-check so a reconnect clears it in place. */}
+      {offline && (
+        <div className="mt-4 flex items-center gap-3 rounded-xl border border-[var(--color-danger)]/35 bg-[var(--color-danger)]/[0.07] p-3.5">
+          <WifiOff
+            size={16}
+            strokeWidth={1.5}
+            className="shrink-0 text-[var(--color-danger)]"
+            aria-hidden="true"
+          />
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] text-snow">No network connection</p>
+            <p className="text-[11px] leading-snug text-fog">
+              Can&apos;t reach the online model&apos;s API. Connect to the
+              internet, or take the red pill to run locally.
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={rechecking}
+            onClick={async () => {
+              setRechecking(true);
+              try {
+                await onRecheck();
+              } finally {
+                setRechecking(false);
+              }
+            }}
+            className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-hairline px-2.5 py-1.5 text-[11px] text-parchment transition hover:text-snow disabled:opacity-50 ${FOCUS_RING}`}
+          >
+            {rechecking && <Loader2 size={12} className="animate-spin" />}
+            Re-check
+          </button>
+        </div>
+      )}
 
       {/* Tabs. role=tablist so a screen reader announces this as one control
           with two states rather than two unrelated buttons. */}

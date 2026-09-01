@@ -103,6 +103,20 @@ HARD LENGTH LIMIT — your reply is spoken aloud, so every extra word is dead ai
 - Ask exactly one question, and end your reply on it."""
 
 
+# Local 3B-class models drop a rule buried in the system prompt once the
+# transcript grows past a few turns — the same recency failure the name
+# directive documents below. BREVITY_RULE's "ask exactly one question" lives up
+# in the system prompt, so on a local model it is the first casualty: the reply
+# validates the answer and asks nothing, which hands the candidate a dead end
+# and stalls the interview — the "offline doesn't ask questions like online"
+# report. Restating just the question rule as the LAST thing the model reads
+# puts it in the most recent tokens before generation, where it actually holds.
+LOCAL_QUESTION_ANCHOR = """END ON A QUESTION — this is required, not optional:
+- Your reply must finish with exactly one interview question.
+- The final sentence must be that question and end with "?".
+- Do not end on a comment, a compliment, or a summary of their answer."""
+
+
 def _extract_candidate_name(resume_text: str) -> str:
     """Pull the candidate's name off the top of a resume, or "" if unsure.
 
@@ -148,7 +162,7 @@ def _extract_candidate_name(resume_text: str) -> str:
 def _name_directive(session: "InterviewSession") -> str:
     """The candidate's name, restated as an instruction the model must act on.
 
-    Two strengths on purpose. A cloud 8B model picks the name out of the resume
+    Two strengths on purpose. A capable cloud model picks the name out of the resume
     context on its own, and piling on redundant instruction measurably degrades
     instruction-following on small models — so the local build gets the
     reinforced version and the cloud build gets the light one.
@@ -244,75 +258,158 @@ VERDICT_MAX_TOKENS = 420
 VERDICT_TIMEOUT_SEC = 45.0
 TURN_TIMEOUT_SEC = 20.0
 
+# A cloud model that fails is skipped for this long before the cascade spends
+# another timeout probing it, so a degraded primary hands off to its hot standby
+# for the window instead of stalling every turn. Short enough that a brief blip
+# self-heals within a session.
+MODEL_COOLDOWN_SEC = 90.0
+
+# The first cloud attempt is normally the fast primary; cap its wait well under
+# the caller's ceiling so a hang (not a clean error) is caught in seconds and the
+# standby answers. Standbys keep the caller's full timeout — a bigger model is
+# legitimately slower and must not be cut off mid-reply.
+PRIMARY_FAST_TIMEOUT_SEC = 12.0
+
 
 class ConversationEngine:
+    # Cache key for the local Ollama client, kept distinct from any cloud
+    # provider name so the cascade's offline rung can't collide with a vendor.
+    _LOCAL_KEY = "__local__"
+
     def __init__(self):
         self.sessions: dict[str, InterviewSession] = {}
         self.nvidia_api_key = os.getenv("NVIDIA_API_KEY", "")
-        self._client: AsyncOpenAI | None = None
+        # One cached client per backend, keyed by cloud provider name (or
+        # _LOCAL_KEY for Ollama). A single failed turn's cascade can touch two
+        # clouds and the local model; caching each keeps every connection warm
+        # instead of rebuilding it on each rung.
+        self._clients: dict[str, AsyncOpenAI] = {}
         self._client_generation: int = -1
+        # Models that just failed, on a short cooldown so the cascade skips them
+        # instead of eating their timeout every turn. Keyed (provider, model) ->
+        # monotonic deadline. A dead primary thus costs one slow turn, then the
+        # hot standby serves the rest until the primary's cooldown lapses and it
+        # is re-probed once.
+        self._model_cooldown: dict[tuple[str, str], float] = {}
 
-    def _llm(self) -> AsyncOpenAI:
-        """One shared client for the process.
+    def _client_for(self, key: str) -> AsyncOpenAI:
+        """A cached client for one backend: a cloud provider name, or the
+        sentinel `_LOCAL_KEY` for Ollama.
 
         Previously every call site built its own AsyncOpenAI, which meant a new
         TLS handshake and connection pool for each interviewer turn and again
-        for the final report. Reusing one client keeps the connection warm, so
-        subsequent calls skip setup entirely.
+        for the final report. Caching one client per backend keeps the
+        connection warm, so subsequent calls skip setup entirely.
 
-        The backend (local Ollama vs NVIDIA cloud) is decided once by
-        `llm_config` — see that module for the mode rules.
-
-        REBUILT when llm_config's generation changes. `model=` is read fresh on
-        every call but `base_url` and the auth header are frozen at
-        construction, so without this a provider switch kept posting to the old
-        endpoint: picking Groq sent `llama-3.1-8b-instant` to NVIDIA and got
-        back a bare `404 page not found`.
+        The whole cache is dropped when llm_config's generation changes. `model=`
+        is read fresh on every call but `base_url` and the auth header are frozen
+        at construction, so without this a provider switch kept posting to the
+        old endpoint: picking Groq sent `openai/gpt-oss-20b` to NVIDIA and got
+        back a bare `404 page not found`. A key edit or mode flip bumps the
+        generation too, so a stale key can't linger in a cached client.
         """
         gen = llm_config.config_generation()
-        if self._client is None or self._client_generation != gen:
-            self._client = llm_config.make_client()
+        if self._client_generation != gen:
+            self._clients.clear()
             self._client_generation = gen
             logger.info(f"🧠 Conversation LLM: {llm_config.describe()}")
-        return self._client
+        client = self._clients.get(key)
+        if client is None:
+            client = (
+                llm_config.make_ollama_client()
+                if key == self._LOCAL_KEY
+                else llm_config.make_client(key)
+            )
+            self._clients[key] = client
+        return client
+
+    def _cooling(self, provider: str, model: str) -> bool:
+        """True while (provider, model) is on its post-failure cooldown, so the
+        cascade skips it rather than paying another timeout to rediscover it is
+        down. Expires on its own; a success clears it early."""
+        return self._model_cooldown.get((provider, model), 0.0) > time.monotonic()
 
     async def _complete(self, **kwargs) -> str | None:
-        """Run a completion, falling back to local Ollama if the cloud fails.
+        """Run a completion, cascading across backends until one answers.
 
-        Returns None when every backend is exhausted; the caller then supplies
-        its own hardcoded line. The three tiers are deliberate:
+        Returns None only when every backend is exhausted; the caller then
+        supplies its own hardcoded line. The rungs, in order:
 
-          1. whatever is configured (cloud, usually)
-          2. local Ollama, if it is actually listening
-          3. None -> caller's canned string
+          1. the picked cloud provider — its fast primary, then its hot standby
+          2. the OTHER cloud provider (primary, then standby), if it has a key
+          3. local Ollama, if it is actually listening
+          4. None -> caller's canned string
 
-        Tier 2 exists because cloud outages are the common case and are not our
-        fault: NVIDIA's NIM free tier returns `400 DEGRADED function cannot be
-        invoked` when its hosted function is unhealthy, which no retry, timeout
-        or parameter change can fix. If a local model is running there is no
-        reason to serve a canned line instead of it.
+        Within a provider the models come from llm_config.cloud_models_for()
+        (primary first, then any same-vendor standby). A model that fails is put
+        on a short cooldown (MODEL_COOLDOWN_SEC) and skipped until it lapses, so
+        a degraded primary stalls at most one turn and its standby then carries
+        the session — the caller feels the switch once, not every turn. The
+        primary attempt is also capped at PRIMARY_FAST_TIMEOUT_SEC and clients
+        carry max_retries=0, so a hung vendor fails in seconds, not the caller's
+        full ceiling nor the SDK's three tries.
+
+        A same-vendor standby comes first because it is the cheapest way to keep
+        the answer quality the user chose: NVIDIA's free NIM has been degraded on
+        big instruct models while a smaller sibling stayed healthy (measured — a
+        500 "inference connection error" on one call shape, a 180s stall on
+        another). Only when a whole vendor is down do we change clouds, and only
+        when every cloud is down do we drop to a local model or a canned line.
         """
-        try:
-            completion = await self._llm().chat.completions.create(
-                model=llm_config.chat_model(), **kwargs
-            )
-            return completion.choices[0].message.content.strip()
-        except Exception as e:
-            logger.error(f"LLM call failed ({llm_config.describe()}): {e}")
-
-        # Already local — tier 2 is the same box that just failed.
+        # Local mode: the configured backend already IS Ollama, so there is no
+        # cloud to cascade through — one attempt, then the caller's canned line.
         if llm_config.is_local():
-            return None
-        if not llm_config.ollama_reachable(force=True):
-            logger.error("No local fallback: Ollama is not reachable.")
-            return None
+            try:
+                completion = await self._client_for(
+                    self._LOCAL_KEY
+                ).chat.completions.create(model=llm_config.chat_model(), **kwargs)
+                return completion.choices[0].message.content.strip()
+            except Exception as e:
+                logger.error(f"Local LLM call failed ({llm_config.describe()}): {e}")
+                return None
 
-        try:
-            logger.warning("⚠️  Cloud LLM unavailable — falling back to local Ollama.")
-            fallback = AsyncOpenAI(
-                base_url=llm_config.ollama_base_url(), api_key="ollama"
+        # Cloud mode: the picked provider first, then any other keyed provider
+        # (cloud_fallback_order() drops keyless vendors). Within each provider,
+        # walk its model list — fast primary, then hot standby — so a degraded
+        # primary hands off to a warm sibling before we change clouds. Cooling
+        # models are skipped, so a dead primary is paid for once, not per turn.
+        for name in llm_config.cloud_fallback_order():
+            for model in llm_config.cloud_models_for(name):
+                if self._cooling(name, model):
+                    continue
+                call_kwargs = dict(kwargs)
+                if model == llm_config.cloud_model_for(name):
+                    # The primary is meant to be fast; don't let a hang spend the
+                    # caller's whole ceiling before the standby gets its turn.
+                    call_kwargs["timeout"] = min(
+                        kwargs.get("timeout", PRIMARY_FAST_TIMEOUT_SEC),
+                        PRIMARY_FAST_TIMEOUT_SEC,
+                    )
+                try:
+                    completion = await self._client_for(name).chat.completions.create(
+                        model=model, **call_kwargs
+                    )
+                    # Answered — clear any cooldown so it's preferred again.
+                    self._model_cooldown.pop((name, model), None)
+                    return completion.choices[0].message.content.strip()
+                except Exception as e:
+                    self._model_cooldown[(name, model)] = (
+                        time.monotonic() + MODEL_COOLDOWN_SEC
+                    )
+                    logger.warning(f"⚠️  Cloud model '{name}: {model}' unavailable: {e}")
+
+        # Every cloud rung is down — serve a local model if one is listening.
+        if not llm_config.ollama_reachable(force=True):
+            logger.error(
+                "No local fallback: all cloud providers failed and Ollama is "
+                "not reachable."
             )
-            completion = await fallback.chat.completions.create(
+            return None
+        try:
+            logger.warning(
+                "⚠️  All cloud providers unavailable — falling back to local Ollama."
+            )
+            completion = await self._client_for(self._LOCAL_KEY).chat.completions.create(
                 model=os.getenv("OLLAMA_MODEL", llm_config.OLLAMA_DEFAULT_MODEL),
                 **kwargs,
             )
@@ -649,6 +746,13 @@ Interview topics to weave in naturally (don't read verbatim — adapt to convers
         elif name_directive:
             messages[0]["content"] += name_directive
 
+        # Restate the "end on a question" rule as the very last thing a local
+        # model reads — after the name directive, so the question rule wins on
+        # recency (see LOCAL_QUESTION_ANCHOR). Cloud models honour it from the
+        # system prompt and get no reinforcement, keeping their turns lean.
+        if llm_config.is_local():
+            messages.append({"role": "system", "content": LOCAL_QUESTION_ANCHOR})
+
         text = await self._complete(
             messages=messages,
             temperature=0.75,
@@ -658,7 +762,16 @@ Interview topics to weave in naturally (don't read verbatim — adapt to convers
         if text is None:
             logger.error("Conversation response failed on every backend.")
             return "Could you tell me more about your approach there?"
-        return _trim_to_sentences(text)
+
+        reply = _trim_to_sentences(text)
+        # Final guarantee that the turn ends on a question. _trim_to_sentences can
+        # only recover a question the model actually wrote; when a weak local
+        # model acknowledges the answer but asks nothing, there is none to
+        # recover — and a question-less turn stalls the interview. Pair the reply
+        # with a generic probe rather than hand the candidate a dead end.
+        if "?" not in reply:
+            reply = f"{reply} Can you walk me through your thinking there?".strip()
+        return reply
 
     async def _generate_wrap_up(self, session: InterviewSession) -> str:
         prompt = f"""You are wrapping up a mock interview as a senior hiring manager.

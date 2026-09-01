@@ -166,6 +166,23 @@ with _EnvSandbox(LLM_MODE="nvidia"):
     check("cloud default", llm_config.chat_model(), llm_config.NVIDIA_MODEL)
 
 
+print("\ncloud model list — primary first, then hot standby, deduped:")
+with _EnvSandbox(LLM_MODE="nvidia"):
+    nv = llm_config.cloud_models_for("nvidia")
+    check("nvidia primary is first", nv[0], llm_config.NVIDIA_MODEL)
+    check("nvidia hot standby follows", llm_config.NVIDIA_FALLBACK_MODEL in nv, True)
+    check("nvidia list has no duplicates", len(nv), len(set(nv)))
+    check("groq list is just its primary",
+          llm_config.cloud_models_for("groq"),
+          [llm_config.CLOUD_PROVIDERS["groq"]["model"]])
+with _EnvSandbox(LLM_MODE="nvidia", NVIDIA_MODEL=llm_config.NVIDIA_FALLBACK_MODEL):
+    # Pointing the primary env override at the standby collapses the list — the
+    # dedupe must not leave the same model queued twice.
+    check("primary==standby collapses to one entry",
+          llm_config.cloud_models_for("nvidia"),
+          [llm_config.NVIDIA_FALLBACK_MODEL])
+
+
 print("\nclient points at the right endpoint:")
 with _FakeOllama() as fake:
     host = f"http://127.0.0.1:{fake.port}"

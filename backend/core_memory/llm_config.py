@@ -29,7 +29,21 @@ from openai import AsyncOpenAI
 logger = logging.getLogger(__name__)
 
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+# The small, reliable Llama-3.1-8B is the PRIMARY: it answers in ~0.5s with
+# clean output and valid JSON for generate_questions, where the free tier's
+# bigger instruct models (mistral-nemotron, gemma-4-31b) time out past 20s
+# (measured, 2026-08). NVIDIA_FALLBACK_MODEL below is wired as a same-vendor hot
+# standby for when this one degrades, so there is no manual model swap to make
+# when the free tier wobbles — the conversation engine hands off automatically.
 NVIDIA_MODEL = "meta/llama-3.1-8b-instruct"
+
+# Hot standby on the SAME vendor: when the fast primary above is failing or
+# hanging, the conversation engine tries this larger model before it changes
+# clouds. Measured alive at ~5s with clean JSON and no reasoning trace to strip
+# (2026-08), unlike mistral-nemotron/gemma-4-31b. It is deliberately the
+# slower/bigger one — the 8B carries every healthy turn; this only steps in when
+# the 8B can't. Wired in via CLOUD_PROVIDERS["nvidia"]["fallbacks"].
+NVIDIA_FALLBACK_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
 
 # ── Cloud providers ──────────────────────────────────────────────────────
 # All of these speak the OpenAI wire protocol, so supporting one more is a row
@@ -39,19 +53,28 @@ NVIDIA_MODEL = "meta/llama-3.1-8b-instruct"
 # `env_key` is the variable each provider's key lives under in backend/.env,
 # kept distinct so a user can hold keys for both and switch by flipping
 # LLM_PROVIDER without re-pasting anything.
+#
+# `console` must point at a *key management* page, not a model page. It used to
+# link to build.nvidia.com/mistralai/mistral-nemotron, which went stale the
+# moment the model changed — and sent people to a page for a model this app no
+# longer calls. The account-level keys page is model-agnostic, so it survives
+# every future swap of NVIDIA_MODEL and matches what Groq's link already does.
 CLOUD_PROVIDERS = {
     "nvidia": {
         "label": "NVIDIA NIM",
         "base_url": NVIDIA_BASE_URL,
         "model": NVIDIA_MODEL,
+        # Same-vendor hot standbys, tried in order after `model` when it fails
+        # and before the cascade changes clouds. See cloud_models_for().
+        "fallbacks": [NVIDIA_FALLBACK_MODEL],
         "env_key": "NVIDIA_API_KEY",
         "prefix": "nvapi-",
-        "console": "https://build.nvidia.com/meta/llama-3_1-8b-instruct",
+        "console": "https://build.nvidia.com/settings/api-keys",
     },
     "groq": {
         "label": "Groq",
         "base_url": "https://api.groq.com/openai/v1",
-        "model": "llama-3.1-8b-instant",
+        "model": "openai/gpt-oss-20b",
         "env_key": "GROQ_API_KEY",
         "prefix": "gsk_",
         "console": "https://console.groq.com/keys",
@@ -74,6 +97,15 @@ PROBE_TIMEOUT_SEC = 0.6
 
 _probe_result: bool | None = None
 
+# The cloud probe is a real internet round-trip, not loopback, so it gets a more
+# forgiving ceiling than PROBE_TIMEOUT_SEC. In practice a live host answers a TCP
+# connect in well under a second, and a truly offline machine fails almost
+# instantly (DNS failure / no route) — this ceiling only bites when a host is
+# reachable at the network layer but silent, which is rare for the cloud CDNs.
+CLOUD_PROBE_TIMEOUT_SEC = 1.5
+
+_cloud_probe_result: bool | None = None
+
 # Runtime overrides, set by the /api/v1/llm/* endpoints.
 #
 # These exist because `load_dotenv()` runs once at import, so rewriting
@@ -88,7 +120,7 @@ _provider_override: str | None = None
 # this to know their base_url is stale: chat_model() is read per call, but a
 # client's base_url is frozen at construction, so a provider switch would
 # otherwise send the new provider's model name to the OLD provider's endpoint
-# (Groq's `llama-3.1-8b-instant` posted to integrate.api.nvidia.com → 404).
+# (Groq's `openai/gpt-oss-20b` posted to integrate.api.nvidia.com → 404).
 _config_generation = 0
 
 
@@ -179,6 +211,37 @@ def ollama_reachable(force: bool = False) -> bool:
     return _probe_result
 
 
+def cloud_reachable(force: bool = False) -> bool:
+    """True if the selected cloud provider's API host accepts a TCP connection.
+
+    The mirror of `ollama_reachable`, aimed outward: it answers "can this machine
+    reach the cloud model at all", which is the question the chooser needs before
+    it lets someone commit to Online. Like the local probe it is a bare TCP
+    connect — no key spent, no request billed — and cached, because status() may
+    ask more than once and the answer does not move between two calls.
+
+    Probes the chosen provider's host rather than a generic ping: the honest
+    claim is "we cannot reach the API you picked", and a network that blocks the
+    provider but not the wider internet should still read as unreachable here.
+    """
+    global _cloud_probe_result
+    if _cloud_probe_result is not None and not force:
+        return _cloud_probe_result
+
+    parsed = urlparse(provider_spec()["base_url"])
+    host = parsed.hostname or ""
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    if not host:
+        _cloud_probe_result = False
+        return _cloud_probe_result
+    try:
+        with socket.create_connection((host, port), timeout=CLOUD_PROBE_TIMEOUT_SEC):
+            _cloud_probe_result = True
+    except OSError:
+        _cloud_probe_result = False
+    return _cloud_probe_result
+
+
 def effective_mode() -> str:
     """Resolve `auto` to a concrete backend; pass explicit choices through."""
     mode = configured_mode()
@@ -198,25 +261,92 @@ def is_local() -> bool:
     return effective_mode() == "ollama"
 
 
-def chat_model() -> str:
-    if is_local():
-        return os.getenv("OLLAMA_MODEL", OLLAMA_DEFAULT_MODEL)
-    # Per-provider override, so someone can point Groq at a 70B without
-    # touching this file: NVIDIA_MODEL, GROQ_MODEL, …
-    spec = provider_spec()
+def cloud_model_for(name: str) -> str:
+    """The model a specific cloud provider should use.
+
+    Honours the per-provider env override (NVIDIA_MODEL, GROQ_MODEL, …) before
+    the table default, so someone can point Groq at a bigger model without
+    touching this file.
+    """
+    spec = CLOUD_PROVIDERS[name]
     return os.getenv(spec["env_key"].replace("_API_KEY", "_MODEL"), spec["model"])
 
 
-def make_client() -> AsyncOpenAI:
-    """An AsyncOpenAI pointed at whichever backend is in effect.
+def cloud_models_for(name: str) -> list[str]:
+    """Ordered models to try for one provider: the primary first, then any hot
+    standbys.
+
+    The primary honours the per-provider *_MODEL env override (via
+    cloud_model_for); the standbys are the provider table's `fallbacks`. Deduped
+    and order-preserving, so a standby equal to the primary — e.g. after someone
+    points NVIDIA_MODEL at the standby — collapses to one entry instead of being
+    tried twice.
+    """
+    spec = CLOUD_PROVIDERS[name]
+    ordered = [cloud_model_for(name), *spec.get("fallbacks", ())]
+    seen: set[str] = set()
+    out: list[str] = []
+    for model in ordered:
+        if model and model not in seen:
+            seen.add(model)
+            out.append(model)
+    return out
+
+
+def chat_model() -> str:
+    if is_local():
+        return os.getenv("OLLAMA_MODEL", OLLAMA_DEFAULT_MODEL)
+    return cloud_model_for(cloud_provider())
+
+
+def cloud_fallback_order() -> list[str]:
+    """Cloud providers to try, in order: the one the user picked first, then any
+    other provider that also has a key.
+
+    A free hosted tier can be degraded for one vendor while another is healthy —
+    measured, not hypothetical: NVIDIA's NIM returned a 500 "inference
+    connection error" on one call shape and stalled another past 180s while the
+    key and params were valid. Trying the second cloud before dropping to a
+    local 3B model keeps the cloud-quality answer the user chose when only one
+    vendor is down. Providers without a key are skipped — nothing to try there.
+    """
+    primary = cloud_provider()
+    ordered = [primary] + [n for n in CLOUD_PROVIDERS if n != primary]
+    return [n for n in ordered if has_api_key(n)]
+
+
+def make_ollama_client() -> AsyncOpenAI:
+    """A client pointed at local Ollama regardless of the configured mode.
+
+    The conversation engine's last fallback rung needs Ollama even while the
+    process mode is `cloud`, so this cannot go through `make_client()` (which
+    follows the mode and would hand back a cloud client instead).
+    """
+    return AsyncOpenAI(base_url=ollama_base_url(), api_key="ollama", max_retries=0)
+
+
+def make_client(provider: str | None = None) -> AsyncOpenAI:
+    """An AsyncOpenAI pointed at a backend.
+
+    With no argument it follows the effective mode: local Ollama, or the
+    configured cloud provider. Pass a provider name to force a specific cloud
+    vendor — the conversation engine uses this to try a second cloud provider
+    when the first is degraded, without disturbing the process-wide mode.
 
     Ollama ignores the API key, but the OpenAI SDK refuses to construct without
     a non-empty one — hence the placeholder rather than "".
+
+    max_retries=0 because this app has its own fallback: the SDK retries twice
+    by default, which turns one degraded vendor (a 500, or a request that stalls
+    to the timeout) into a 60-180s hang before the caller can move on. Failing
+    fast is the whole point of having somewhere to fall back to.
     """
-    if is_local():
-        return AsyncOpenAI(base_url=ollama_base_url(), api_key="ollama")
-    spec = provider_spec()
-    return AsyncOpenAI(base_url=spec["base_url"], api_key=api_key_for())
+    if provider is None and is_local():
+        return make_ollama_client()
+    spec = provider_spec(provider)
+    return AsyncOpenAI(
+        base_url=spec["base_url"], api_key=api_key_for(provider), max_retries=0
+    )
 
 
 def describe() -> str:
@@ -315,6 +445,12 @@ def set_mode(mode: str, provider: str | None = None) -> None:
         global _probe_result
         _probe_result = None
 
+    # The cloud probe is cached per host, and a provider switch changes the host;
+    # drop it here so status()'s forced probe on the reply this call returns is
+    # measured against the provider the user just chose.
+    global _cloud_probe_result
+    _cloud_probe_result = None
+
     _bump_generation()
     logger.info(f"🔀 LLM mode → {mode} ({describe()})")
 
@@ -357,11 +493,12 @@ def status() -> dict:
         "provider": cloud_provider(),
         "model": chat_model(),
         "ollama_reachable": ollama_reachable(force=True),
+        "cloud_reachable": cloud_reachable(force=True),
         "ollama_model": os.getenv("OLLAMA_MODEL", OLLAMA_DEFAULT_MODEL),
         "providers": {
             name: {
                 "label": spec["label"],
-                "model": spec["model"],
+                "model": cloud_model_for(name),
                 "console": spec["console"],
                 "prefix": spec["prefix"],
                 "configured": has_api_key(name),

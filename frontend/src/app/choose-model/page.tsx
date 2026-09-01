@@ -277,6 +277,13 @@ export default function ChooseModelPage() {
         setModal("cloud");
         return;
       }
+      /* Has a key but the machine is offline: selectMode would "succeed" and the
+         failure would land on the first interview question, several screens from
+         its cause. Open the setup so the network flag is what they see instead. */
+      if (mode === "cloud" && status && status.cloudReachable === false) {
+        setModal("cloud");
+        return;
+      }
       if (mode === "ollama" && status && !ollamaUp) {
         setModal("ollama");
         return;
@@ -360,12 +367,13 @@ export default function ChooseModelPage() {
           {(Object.values(MODES) as ModeCopy[]).map((copy) => {
             const isPending = pending === copy.mode;
             /* Cloud follows whichever provider is selected; local follows
-               whatever OLLAMA_MODEL is actually set to. Hardcoding either here
-               is how the card ends up advertising a model nobody is running. */
+               whatever OLLAMA_MODEL is actually set to. The name is sourced only
+               from live backend status (which reads llm_config.py) — no hardcoded
+               model string to drift; "…" shows for the blink before status lands. */
             const model =
               copy.mode === "cloud"
-                ? (status?.providers?.[provider]?.model ?? copy.model)
-                : (status?.ollamaModel ?? copy.model);
+                ? (status?.providers?.[provider]?.model ?? "…")
+                : (status?.ollamaModel ?? "…");
 
             return (
               <div key={copy.mode} className={`pill-slot pill-${copy.pill}`}>
@@ -434,6 +442,7 @@ export default function ChooseModelPage() {
           status={status}
           initialProvider={provider}
           onSaved={setStatus}
+          onRecheck={() => refresh()}
           onCommit={(p) => commit("cloud", p)}
           committing={pending === "cloud"}
           onClose={() => setModal(null)}

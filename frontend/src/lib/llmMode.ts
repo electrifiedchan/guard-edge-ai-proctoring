@@ -41,7 +41,6 @@ export interface ModeCopy {
   pill: "online" | "offline";
   label: string;
   tagline: string;
-  model: string;
   /**
    * The one sentence this choice is actually about, shown large and in the
    * pill's own colour. Both pills state their cost or their guarantee outright
@@ -77,14 +76,13 @@ export const MODES: Record<LlmMode, ModeCopy> = {
     pill: "offline",
     label: "Online",
     tagline: "Cloud model · needs an API key",
-    model: "llama-3.1-8b",
     // Stated flat, in the pill's own blue, at the top of the card. The earlier
     // draft filed this under `cons` as a grey "Your resume text is sent to
     // NVIDIA" — technically present, and easy to skip past on the way to the
     // convenient choice. It is not a footnote; it is the whole trade.
     truth: "Your resume leaves this machine.",
     pros: [
-      "8B model — sharper, more specific questions",
+      "Capable cloud model — sharper, more specific questions",
       "No VRAM cost, so detection keeps the GPU",
       "Nothing to install or download",
     ],
@@ -98,7 +96,6 @@ export const MODES: Record<LlmMode, ModeCopy> = {
     pill: "online",
     label: "Offline",
     tagline: "Local Ollama · sovereign",
-    model: "qwen2.5:3b",
     truth: "Nothing leaves this machine.",
     pros: [
       "Your resume never touches a network",
@@ -155,6 +152,8 @@ export interface LlmStatus {
   model: string;
   /** Whether a local Ollama answered a probe just now. */
   ollamaReachable: boolean;
+  /** Whether the selected cloud provider's API answered a probe just now. */
+  cloudReachable: boolean;
   ollamaModel: string;
   providers: Record<CloudProvider, ProviderInfo>;
 }
@@ -166,6 +165,10 @@ function normalise(data: Record<string, unknown>): LlmStatus {
     provider: data.provider === "groq" ? "groq" : "nvidia",
     model: String(data.model ?? ""),
     ollamaReachable: Boolean(data.ollama_reachable),
+    // Absent (older backend, or one still booting) must not read as "offline"
+    // and trip the network flag — only an explicit false means unreachable.
+    cloudReachable:
+      data.cloud_reachable === undefined ? true : Boolean(data.cloud_reachable),
     ollamaModel: String(data.ollama_model ?? ""),
     providers: providers as Record<CloudProvider, ProviderInfo>,
   };
