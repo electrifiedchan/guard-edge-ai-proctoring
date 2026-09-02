@@ -805,7 +805,7 @@ must agree. 🧸 *A translator making sure both sides use the same dictionary.*
 | `startapp.bat` | A double-click file that starts backend + frontend together (Windows) | The **"ON" button** for the whole app |
 | `AGENTS.md` | Rules for any AI assistant (like me) working on this repo | The **house rules** on the fridge |
 | `.gitignore` | The list of files that must **never** be saved to version history (secrets, video, your slides) | The **"do not photograph" sign** |
-| `TODO.md` / `TODO_HISTORY.md` | What's left to do, and a kept record of past decisions and even wrong guesses | The **project diary** |
+| `SETUP.md` | Step-by-step setup, for a human or an AI agent, plus what to do when it breaks | The **assembly instructions** |
 | `frontend/verify-*.js` | Small scripts that screenshot the UI to check it still looks right | **Spot-check photos** on the assembly line |
 | `frontend/tsconfig.json`, `eslint.config.mjs`, `next.config.ts`, `postcss.config.mjs` | Settings files that tell the toolkit how strict to be and how to build | The **machine's dial settings** |
 

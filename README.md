@@ -125,7 +125,9 @@ pnpm dev
 Open **http://localhost:3000** → allow camera + mic → upload a resume → practice.
 Then **/replay** for the Composure Curve, **/report** for the coach report, **/dashboard** for progress.
 
-> Windows one-shot: `startapp.bat` (backend on 8080, frontend on 3000) · Containers: `docker-compose up`
+> Windows one-shot: `startapp.bat` (backend on 8080, frontend on 3000)
+>
+> **Full setup instructions — prerequisites, manual path, env files, and troubleshooting — are in [`SETUP.md`](SETUP.md).** Written to be followed by a human or an AI agent.
 
 
 ---
