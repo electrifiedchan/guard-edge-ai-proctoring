@@ -1358,7 +1358,7 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
     "text-[var(--color-snow)]";
 
   return (
-    <div className="w-full flex flex-col gap-3 relative">
+    <div className="w-full h-full min-h-0 flex flex-col gap-3 relative">
 
       {/* Toast — minimal, hairline-bordered, no neon glow spam */}
       <AnimatePresence>
@@ -1391,9 +1391,18 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
           the backend analyses. A fixed height (was h-[380px]) rendered a ~2.49
           box, and object-cover then cropped ~103px off the top and bottom —
           hiding a band that YOLO still received, so a phone held low could be
-          flagged with nothing on screen to explain it. */}
+          flagged with nothing on screen to explain it. Keep the ratio: the
+          evidence frames on /replay and /report are this same canvas, so a
+          preview of a different shape shows the candidate less than the report
+          later holds against them.
+
+          Height-driven, not width-driven. `w-full aspect-video` derived height
+          from the column width, so a wide-but-short window (1531x730 on a 125%
+          display) made this 542px tall inside ~600px of usable height and the
+          telemetry strip below was clipped. flex-1 min-h-0 takes the leftover
+          height instead and the width follows from the ratio. */}
       <div
-        className={`relative w-full aspect-video rounded-lg overflow-hidden flex-shrink-0 lift-1 haze transition-shadow ${
+        className={`relative h-full aspect-video max-w-full mx-auto rounded-lg overflow-hidden flex-1 min-h-0 lift-1 haze transition-shadow ${
           sysStatus === "ACTIVE" ? "ring-signal" : ""
         }`}
       >
@@ -1529,7 +1538,7 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
       </div>
 
       {/* Bottom — Telemetry strip */}
-      <div className="w-full flex flex-col sm:flex-row gap-3">
+      <div className="w-full flex-shrink-0 flex flex-col sm:flex-row gap-3">
 
         {/* BEA Temporal panel — sized to its content. It holds four short,
             fixed-width readouts, so giving it the leftover space just pads

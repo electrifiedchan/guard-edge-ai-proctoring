@@ -519,7 +519,7 @@ export default function SentryPage() {
   }, [stopListening, router]);
 
   return (
-    <main className="h-screen bg-[var(--color-canvas)] flex flex-col px-5 md:px-8 py-5 text-[var(--color-parchment)] items-center overflow-hidden">
+    <main className="h-screen bg-[var(--color-canvas)] flex flex-col px-5 md:px-8 py-5 text-[var(--color-parchment)] items-center overflow-y-auto xl:overflow-hidden">
       {/* Top bar */}
       <header className="w-full max-w-[1400px] mb-4 flex justify-between items-center border-b border-[var(--color-hairline)] pb-4">
         <div className="flex items-center gap-3">
