@@ -106,7 +106,7 @@ git clone https://github.com/electrifiedchan/guard-edge-ai-proctoring.git
 cd guard-edge-ai-proctoring
 
 # Backend
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn backend.edge_main:app --port 8080
 
