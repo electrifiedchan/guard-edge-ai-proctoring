@@ -571,7 +571,18 @@ async def analyze_frame(payload: FramePayload, background_tasks: BackgroundTasks
             risk_packet["autopsy_flag"] = False
             verdict = f"CONFIRMED (ongoing): {verdict}"
         else:
-            risk_packet = await bea_engine.record_telemetry(bea_key, "SIDE_OR_UP")
+            # Pass the pose that was actually measured. This line used to hand the
+            # accumulator a hardcoded "SIDE_OR_UP", so for as long as a critical sat
+            # pending confirmation the candidate accrued side-look risk no matter
+            # where they were looking — and the SIDE timer kept running, so a
+            # flickering no-face or multiple-faces read could walk a motionless,
+            # forward-facing candidate through the 5/8/12 s tiers on its own.
+            #
+            # Only meaningful because classify_pose now runs on every frame: while
+            # pose was evaluated in the tail of an if/elif chain, a critical frame
+            # always reported gaze="STRAIGHT", so there was no real reading here to
+            # pass and the hardcoded value was hiding that rather than causing it.
+            risk_packet = await bea_engine.record_telemetry(bea_key, gaze)
             risk_packet["critical_pending"] = decision["count"]
             risk_packet["critical_threshold"] = decision["threshold"]
             verdict = f"⚠️ ANOMALY {decision['count']}/{decision['threshold']}: {verdict}"
