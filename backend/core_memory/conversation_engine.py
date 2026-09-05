@@ -233,6 +233,39 @@ def _trim_to_sentences(text: str, max_words: int = 45) -> str:
 
     return result
 
+
+def _clean_spoken_response(text: str) -> str:
+    """Remove model reasoning/planning text before it reaches the candidate."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+
+    # Reasoning models may expose their private trace in tags.
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"</?think>", "", text, flags=re.IGNORECASE).strip()
+
+    # Smaller instruct models sometimes emit a planning label instead of tags,
+    # followed by quoted candidate questions. Keep one actual question and drop
+    # the planning prose so it is not shown or spoken.
+    marker = re.search(
+        r"(?:thinking\s+process|chain\s+of\s+thought|reasoning)\s*:",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if marker:
+        quoted_questions = re.findall(r"[\"']([^\"']+\?)", text[marker.end():])
+        if quoted_questions:
+            return quoted_questions[0].strip()
+        text = text[marker.end():].strip()
+
+    text = re.sub(r"^\s*(?:answer|response)\s*:\s*", "", text, flags=re.IGNORECASE)
+    return text.strip(" `")
+
+
+def _normalise_for_comparison(text: str) -> str:
+    """Make small punctuation/casing differences comparable for de-duplication."""
+    return " ".join(re.sub(r"[^a-z0-9\s]", "", (text or "").lower()).split())
+
 SCAFFOLDING_INSTRUCTIONS = {
     0: "",
     1: "\n\nThe candidate seems uncertain. Gently rephrase your question more specifically to help them focus their answer.",
@@ -247,14 +280,27 @@ PERSONA_TRANSITION_INSTRUCTIONS = {
 
 
 # Cloud inference is the dominant cost in every turn and in the final report,
-# so these are tuned deliberately:
-#   VERDICT_MAX_TOKENS — the report prompt asks for 4 short paragraphs (~250
-#     tokens). It used to allow 800, and since tokens are produced serially,
-#     that headroom was pure wait time on the "generating report" spinner.
+# so these are tuned deliberately.
+#
+# A reasoning model (the primary is now gpt-oss-20b) spends completion tokens on
+# a hidden reasoning trace BEFORE the visible answer — measured at ~150-330 for
+# these short, instruction-dense interview prompts. So each cap is spoken content
+# PLUS reasoning headroom, not content alone. At the old 150 cap the reasoning
+# consumed the entire budget and the reply came back EMPTY (finish_reason
+# "length", content ""), which is the "interviewer won't talk" bug. Raising the
+# cap does NOT lengthen replies: the model stops on its own when done, and
+# _trim_to_sentences still bounds the visible text regardless.
+#   SPOKEN_REPLY_MAX_TOKENS — opening, each turn, and closing. ~50 tokens of
+#     spoken content (2 sentences) riding on top of the reasoning trace.
+#   VERDICT_MAX_TOKENS — the report asks for 4 short paragraphs (~250 tokens of
+#     content); the reasoning trace then sits on top of that. Was 420 (tuned for
+#     the old non-reasoning llama, where tokens were content only); a reasoning
+#     model starves at that ceiling.
 #   *_TIMEOUT — the OpenAI SDK defaults to 600s. Without an explicit timeout a
 #     queued upstream request looks like a frozen app. Better to fail fast and
 #     fall back to the deterministic report than to hang.
-VERDICT_MAX_TOKENS = 420
+SPOKEN_REPLY_MAX_TOKENS = 512
+VERDICT_MAX_TOKENS = 768
 VERDICT_TIMEOUT_SEC = 45.0
 TURN_TIMEOUT_SEC = 20.0
 
@@ -520,6 +566,18 @@ class ConversationEngine:
             }
 
         response = await self._generate_response(session, is_transition)
+        previous_interviewer_replies = {
+            _normalise_for_comparison(turn.content)
+            for turn in session.conversation_history
+            if turn.role == "interviewer"
+        }
+        if _normalise_for_comparison(response) in previous_interviewer_replies:
+            logger.warning(
+                "LLM repeated an interviewer question on turn %s; using the next "
+                "resume question instead.",
+                session.current_turn,
+            )
+            response = self._next_distinct_question(session, previous_interviewer_replies)
         session.conversation_history.append(ConversationTurn(
             role="interviewer",
             content=response,
@@ -534,6 +592,25 @@ class ConversationEngine:
             "is_complete": False,
             "scaffolding_used": session.scaffolding_level > 0,
         }
+
+    def _next_distinct_question(
+        self, session: InterviewSession, previous: set[str]
+    ) -> str:
+        """Return an unused resume question, with a varied safe fallback."""
+        for question in session.resume_questions:
+            candidate = str(question.get("question", "")).strip()
+            if candidate and _normalise_for_comparison(candidate) not in previous:
+                return candidate
+
+        fallbacks = [
+            "What was the most difficult decision you made in that work?",
+            "What result did you achieve, and how did you measure it?",
+            "What would you change if you tackled that problem again?",
+        ]
+        for candidate in fallbacks:
+            if _normalise_for_comparison(candidate) not in previous:
+                return candidate
+        return "Can you walk me through a different example from your experience?"
 
     async def generate_final_verdict(self, session_id: str) -> dict:
         session = self.sessions.get(session_id)
@@ -675,7 +752,12 @@ Rules:
         # "adequate" leaves level unchanged
 
     async def _generate_opening(self, session: InterviewSession) -> str:
-        topics = [q.get("focus", "general") for q in session.resume_questions[:2]]
+        # `focus` labels ("System Design", "Performance") are too abstract to open
+        # on — they produce "so, tell me about your experience with system design",
+        # which is the generic feel we are trying to kill. The generated questions
+        # now name the candidate's actual projects, so hand the model the first one
+        # verbatim and let it open on something concrete instead.
+        openers = [q["question"] for q in session.resume_questions[:2] if q.get("question")]
 
         # The opening used to be hardcoded warm-and-gentle. Now that the user
         # picks a starting rung, an opening that ignores it would misrepresent
@@ -703,12 +785,19 @@ Rules:
         prompt = f"""{system_prompt}
 {_name_directive(session)}
 
-You are starting the interview. The candidate's background includes: {session.resume_text[:500]}
-Their resume highlights topics like: {', '.join(topics)}.
+You are starting the interview. The candidate's background includes: {session.resume_text[:800]}
+
+Later in this interview you will dig into:
+{chr(10).join(f"- {q}" for q in openers) or "- (no plan available; draw from the resume above)"}
+Do NOT ask those yet. They are here only so your opening points in the right
+direction — firing a deep project question as the very first thing said gives the
+candidate no on-ramp and reads as an interrogation.
+
+Greet them by name, then ask ONE opening question.
 
 Generate a brief, natural opening (1-2 sentences). {brief}{BREVITY_RULE}"""
 
-        text = await self._call_llm(prompt)
+        text = _clean_spoken_response(await self._call_llm(prompt))
         return _trim_to_sentences(text)
 
     async def _generate_response(self, session: InterviewSession, is_transition: bool) -> str:
@@ -756,14 +845,14 @@ Interview topics to weave in naturally (don't read verbatim — adapt to convers
         text = await self._complete(
             messages=messages,
             temperature=0.75,
-            max_tokens=200,
+            max_tokens=SPOKEN_REPLY_MAX_TOKENS,
             timeout=TURN_TIMEOUT_SEC,
         )
         if text is None:
             logger.error("Conversation response failed on every backend.")
             return "Could you tell me more about your approach there?"
 
-        reply = _trim_to_sentences(text)
+        reply = _trim_to_sentences(_clean_spoken_response(text))
         # Final guarantee that the turn ends on a question. _trim_to_sentences can
         # only recover a question the model actually wrote; when a weak local
         # model acknowledges the answer but asks nothing, there is none to
@@ -783,13 +872,13 @@ Generate a brief, warm closing (1-2 sentences). Thank the candidate for their ti
         text = await self._complete(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
-            max_tokens=150,
+            max_tokens=SPOKEN_REPLY_MAX_TOKENS,
             timeout=TURN_TIMEOUT_SEC,
         )
         if text is None:
             logger.error("LLM call failed on every backend.")
             return "Thanks for sharing that. Let's continue — tell me more about your experience."
-        return text
+        return _clean_spoken_response(text)
 
 
 # Global instance

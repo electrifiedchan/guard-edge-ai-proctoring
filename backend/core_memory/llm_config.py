@@ -29,13 +29,21 @@ from openai import AsyncOpenAI
 logger = logging.getLogger(__name__)
 
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
-# The small, reliable Llama-3.1-8B is the PRIMARY: it answers in ~0.5s with
-# clean output and valid JSON for generate_questions, where the free tier's
-# bigger instruct models (mistral-nemotron, gemma-4-31b) time out past 20s
-# (measured, 2026-08). NVIDIA_FALLBACK_MODEL below is wired as a same-vendor hot
-# standby for when this one degrades, so there is no manual model swap to make
-# when the free tier wobbles — the conversation engine hands off automatically.
-NVIDIA_MODEL = "meta/llama-3.1-8b-instruct"
+# PRIMARY. The old primary, meta/llama-3.1-8b-instruct, reached end of life on
+# 2026-08-26 and now returns HTTP 410 Gone — so every interview turn silently
+# fell through to the standby below, which is why replies stopped using the
+# candidate's name and started leaking a reasoning trace.
+#
+# gpt-oss-20b is a reasoning model, but on NVIDIA's endpoint it keeps that trace
+# in a separate `reasoning` field and returns a clean answer in `content` — so
+# nothing to strip. Verified 2026-09: honours response_format=json_object for
+# generate_questions, and a name-directed prompt ("Address them as Sai") comes
+# back using the name ("Hi Sai, …"). One catch this swap required: the reasoning
+# trace burns ~150-330 completion tokens BEFORE the visible answer, so the short
+# interview calls in conversation_engine.py had their caps raised
+# (SPOKEN_REPLY_MAX_TOKENS / VERDICT_MAX_TOKENS). At the old 150-token cap the
+# reasoning ate the whole budget and the reply came back empty — a silent AI.
+NVIDIA_MODEL = "openai/gpt-oss-20b"
 
 # Hot standby on the SAME vendor: when the fast primary above is failing or
 # hanging, the conversation engine tries this larger model before it changes

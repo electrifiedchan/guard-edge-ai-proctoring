@@ -103,6 +103,35 @@ export default function SentryPage() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatHistory]);
 
+  /**
+   * startListening() opens the microphone asynchronously and rejects when the
+   * browser refuses — permission revoked mid-run, device busy, no input at all.
+   * Every call site used to fire it and walk away, so a refusal surfaced only as
+   * an unhandled rejection in the console: turnState had already been set to
+   * "listening" on the line above, so the orb sat on "Waiting for voice" and the
+   * candidate talked into a microphone that was never open. Route every call
+   * through here so a failure is something the user can actually see and fix.
+   */
+  const beginListening = useCallback(async () => {
+    try {
+      await startListening();
+    } catch (err) {
+      console.error("[MIC] Failed to open microphone:", err);
+      const denied = err instanceof Error && err.name === "NotAllowedError";
+      setTurnState("idle");
+      setLiveTranscript(
+        denied
+          ? "MICROPHONE BLOCKED. ALLOW ACCESS, THEN RE-ENGAGE."
+          : "MICROPHONE UNAVAILABLE. CHECK YOUR INPUT DEVICE."
+      );
+      setError(
+        denied
+          ? "Microphone permission denied — allow it in the browser, then re-engage."
+          : "Could not open the microphone. Another app may be holding it."
+      );
+    }
+  }, [startListening]);
+
   // Redirect if no session data. Identity resolution used to live here too;
   // DashboardButton owns that now, so this effect is back to one job.
   useEffect(() => {
@@ -206,10 +235,10 @@ export default function SentryPage() {
       nudgeSpeakingRef.current = false;
       if (micWasLive && !sessionEndingRef.current) {
         setLiveTranscript("MICROPHONE LIVE. LISTENING…");
-        startListening();
+        beginListening();
       }
     }
-  }, [speakText, startListening, stopListening]);
+  }, [speakText, beginListening, stopListening]);
 
   /**
    * A confirmed phone or second person, from either detection path.
@@ -362,7 +391,7 @@ export default function SentryPage() {
 
       setTurnState("listening");
       setLiveTranscript("MICROPHONE LIVE. LISTENING…");
-      startListening();
+      beginListening();
     } catch (err) {
       console.error("Session start failed:", err);
       setError("Failed to start interview session. Check backend.");
@@ -372,7 +401,7 @@ export default function SentryPage() {
       interviewStartedRef.current = false;
       setInterviewActive(false);
     }
-  }, [startingPersona, speakText, startListening]);
+  }, [startingPersona, speakText, beginListening]);
 
   // Reassigned every render, which is what makes the persona pick reach the
   // backend: handleTelemetry is bound into SniperScope once and calls through
@@ -408,9 +437,15 @@ export default function SentryPage() {
       if (sessionEndingRef.current) return;
 
       if (!transcript || transcript.trim().length === 0) {
+        // Whisper reports silence both for a candidate who said nothing and for
+        // a clip it could not decode (voice_engine treats a broken WebM as
+        // silence rather than raising). Reopening the mic with the same neutral
+        // "LISTENING…" line made both cases invisible — the interviewer looked
+        // like it had ignored the answer. Say what happened instead.
+        console.warn("[STT] Empty transcript returned — clip was silent or undecodable.");
         setTurnState("listening");
-        setLiveTranscript("MICROPHONE LIVE. LISTENING…");
-        startListening();
+        setLiveTranscript("DIDN'T CATCH THAT — SPEAK AGAIN.");
+        beginListening();
         return;
       }
 
@@ -458,7 +493,7 @@ export default function SentryPage() {
       if (sessionEndingRef.current) return;
       setTurnState("listening");
       setLiveTranscript("MICROPHONE LIVE. LISTENING…");
-      startListening();
+      beginListening();
 
     } catch (err) {
       console.error("Turn processing error:", err);
@@ -470,7 +505,7 @@ export default function SentryPage() {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setTurnState("listening");
       setLiveTranscript("ERROR. RESUMING LISTEN…");
-      startListening();
+      beginListening();
     }
   }
 

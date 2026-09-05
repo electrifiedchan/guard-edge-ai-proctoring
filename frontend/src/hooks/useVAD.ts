@@ -44,6 +44,14 @@ export function useVAD({
   const silenceStartRef = useRef<number>(0);
   const hasSpeechRef = useRef(false);
   const stoppedRef = useRef(false);
+  /**
+   * Loudest level seen since the mic opened. Only used for diagnostics: a peak
+   * of ~0 while listening means the analyser is being fed silence (suspended
+   * context, muted or wrong input device), which is otherwise indistinguishable
+   * from a candidate who said nothing at all.
+   */
+  const peakLevelRef = useRef(0);
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /**
    * Release the mic and the AudioContext.
@@ -53,6 +61,10 @@ export function useVAD({
    * flushes produces an unplayable WebM. Both exits below route through here.
    */
   const releaseAudio = useCallback(() => {
+    if (watchdogRef.current) {
+      clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -90,6 +102,18 @@ export function useVAD({
 
     const audioContext = new AudioContext();
     audioContextRef.current = audioContext;
+
+    // The mic only opens after the interviewer has finished speaking — several
+    // awaits removed from the click that started the run — and a context created
+    // that far from a user gesture can start life `suspended`. MediaRecorder
+    // records either way, but a suspended context feeds the analyser nothing but
+    // zeros: RMS never crosses the threshold, hasSpeechRef stays false, the
+    // silence timer never arms, and the mic sits open forever on "Waiting for
+    // voice" while every word the candidate says is dropped on the floor.
+    // Resuming is a no-op when the context is already running.
+    if (audioContext.state === "suspended") {
+      await audioContext.resume();
+    }
 
     const source = audioContext.createMediaStreamSource(stream);
     const analyser = audioContext.createAnalyser();
@@ -133,6 +157,25 @@ export function useVAD({
     recorder.start(1000);
     setIsListening(true);
 
+    const track = stream.getAudioTracks()[0];
+    console.log(
+      `[VAD] Listening — context=${audioContext.state} device="${track?.label ?? "unknown"}" ` +
+      `muted=${track?.muted} enabled=${track?.enabled}`
+    );
+
+    // A dead analyser looks exactly like a silent candidate, and the mic stays
+    // open indefinitely either way because the silence timer only arms once
+    // speech has been heard. Say it out loud instead of waiting forever.
+    peakLevelRef.current = 0;
+    watchdogRef.current = setTimeout(() => {
+      if (stoppedRef.current || hasSpeechRef.current) return;
+      console.warn(
+        `[VAD] No speech detected after 6s — context=${audioContextRef.current?.state}, ` +
+        `peak level=${peakLevelRef.current.toFixed(4)}, threshold=${volumeThreshold}. ` +
+        `A peak near 0 means the microphone is delivering silence, not that you were quiet.`
+      );
+    }, 6000);
+
     const dataArray = new Float32Array(analyser.fftSize);
 
     const tick = () => {
@@ -147,6 +190,7 @@ export function useVAD({
       const level = Math.min(rms * 10, 1);
       audioLevelRef.current = level;
       setAudioLevel(level);
+      if (level > peakLevelRef.current) peakLevelRef.current = level;
 
       if (rms > volumeThreshold) {
         hasSpeechRef.current = true;

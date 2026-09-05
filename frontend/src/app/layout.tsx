@@ -51,6 +51,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
+      data-scroll-behavior="smooth"
       className={`${geistSans.variable} ${geistMono.variable} ${inter.variable} ${fraunces.variable} ${jetbrainsMono.variable} h-full antialiased`}
       // THEME_SCRIPT below adds/removes `light` on this element before React
       // hydrates, so the client className intentionally differs from the SSR

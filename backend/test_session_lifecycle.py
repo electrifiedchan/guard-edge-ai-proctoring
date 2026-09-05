@@ -10,6 +10,7 @@ import asyncio
 import time
 
 from core_memory.conversation_engine import (
+    ConversationTurn,
     ConversationEngine,
     InterviewSession,
     SESSION_TTL_SEC,
@@ -100,9 +101,38 @@ def test_verdict_reports_the_focus_score_it_was_given():
     print("PASS verdict returns focus_score under the name the client reads")
 
 
+def test_repeated_model_question_is_replaced():
+    """An echoed opening question must not dead-end the next interview turn."""
+    engine = ConversationEngine()
+    session = _seed(engine)
+    session.resume_questions = [
+        {"question": "What drew you to this field?", "focus": "motivation"},
+        {"question": "What was the hardest technical tradeoff?", "focus": "design"},
+    ]
+    session.conversation_history.append(
+        ConversationTurn(
+            role="interviewer",
+            content="What drew you to this field?",
+            persona="friendly_hr",
+            turn_number=0,
+        )
+    )
+
+    async def echo_opening(_session, _is_transition):
+        return "What drew you to this field?"
+
+    engine._generate_response = echo_opening
+    result = asyncio.run(engine.process_candidate_turn("abc123", "because I like data science."))
+
+    assert result["response"] == "What was the hardest technical tradeoff?"
+    assert result["response"] != "What drew you to this field?"
+    print("PASS repeated model question is replaced")
+
+
 if __name__ == "__main__":
     test_session_survives_verdict()
     test_late_turn_gets_clear_error_not_missing_session()
     test_prune_drops_only_expired_sessions()
     test_verdict_reports_the_focus_score_it_was_given()
+    test_repeated_model_question_is_replaced()
     print("\nAll session lifecycle tests passed.")

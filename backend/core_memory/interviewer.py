@@ -9,6 +9,16 @@ from . import llm_config
 
 logger = logging.getLogger(__name__)
 
+# Reasoning models (gpt-oss-20b on both NVIDIA and Groq) spend completion tokens
+# on a hidden reasoning trace BEFORE they emit a single visible character. At the
+# old cap of 600 the trace consumed the entire budget: finish_reason came back
+# "length", `content` came back None, extract_json failed, and every session
+# silently fell through to _backup_questions() — which is why the interviewer
+# sounded generic and never named a project. llama-3.1-8b hid this for a year
+# because it had no trace and spent all 600 tokens on the answer itself.
+# Measured: ~560 completion tokens for a 4-question plan, so this leaves room.
+QUESTION_PLAN_MAX_TOKENS = 1500
+
 
 class AIInterviewer:
     def __init__(self):
@@ -40,18 +50,26 @@ class AIInterviewer:
             return [{"question": "Can you walk me through your background and experience?"}]
 
         prompt = f"""You are a tough but constructive technical interview coach.
-Analyze this candidate's resume and generate exactly 4 challenging, tailored behavioral/technical interview questions using the STAR method (Situation, Task, Action, Result).
+Read this candidate's resume and write exactly 4 questions that could ONLY be asked of THIS candidate.
 
 Candidate Resume:
 {resume_text[:4000]}
 
+Rules for every question:
+- Name something concrete from the resume out loud — the project, product, company, library, or a number they shipped.
+- Dig into the decisions behind that specific work: what broke, what they traded away, what the result actually was.
+- Still get at situation -> action -> result, but anchored to their real work, never as a template.
+- Never write a question you could paste into a different candidate's interview.
+- One or two sentences. No preamble, no "tell me about a time" boilerplate.
+
 Return ONLY a valid JSON object with a "questions" array. Format:
 {{
   "questions": [
-    {{"question": "Tell me about a time you...", "focus": "Leadership"}},
+    {{"question": "On [project named in the resume] you went with [specific choice they made] - what broke first, and what did you give up to fix it?", "focus": "System Design"}},
     ...
   ]
 }}
+Replace the bracketed parts with real details from the resume above.
 Do not include markdown blocks, pleasantries, or extra text. Just the JSON object."""
 
         try:
@@ -63,7 +81,7 @@ Do not include markdown blocks, pleasantries, or extra text. Just the JSON objec
                 model=llm_config.chat_model(),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
-                max_tokens=600,
+                max_tokens=QUESTION_PLAN_MAX_TOKENS,
                 response_format={"type": "json_object"},
             )
             questions = llm_config.extract_json(completion.choices[0].message.content)

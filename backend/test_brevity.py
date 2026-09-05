@@ -10,7 +10,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core_memory.conversation_engine import _trim_to_sentences
+from core_memory.conversation_engine import _clean_spoken_response, _trim_to_sentences
 
 passed = 0
 failed = 0
@@ -34,6 +34,21 @@ check(
 )
 check("empty stays empty", _trim_to_sentences(""), "")
 check("whitespace only", _trim_to_sentences("   \n  "), "")
+
+print("\nreasoning traces are not spoken to the candidate:")
+check(
+    "thinking process keeps the first question",
+    _clean_spoken_response(
+        'Here is a thinking process: 1. "Questions: Broad, easy warmup questions '
+        'like \'Tell me a bit about yourself?\', \'What drew you to this field?\'"'
+    ),
+    "Tell me a bit about yourself?",
+)
+check(
+    "explicit think tags are removed",
+    _clean_spoken_response("<think>plan the answer</think> Tell me about your project?"),
+    "Tell me about your project?",
+)
 
 print("\nlong replies are cut at a sentence boundary:")
 long_reply = (
