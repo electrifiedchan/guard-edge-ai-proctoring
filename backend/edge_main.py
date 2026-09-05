@@ -26,6 +26,7 @@ import shutil
 from core_memory import llm_config
 import ollama_model_guide
 from core_memory.interviewer import ai_interviewer
+from core_memory.resume_gate import resume_gate
 from core_memory.conversation_engine import conversation_engine
 from core_memory.timeline import (
     init_timeline_tables,
@@ -1571,6 +1572,24 @@ async def upload_resume(file: UploadFile = File(...)):
         resume_text = ai_interviewer.extract_text_from_pdf(temp_path)
         if not resume_text:
             raise HTTPException(status_code=422, detail="Could not extract text from the provided PDF.")
+
+        # Refuse a PDF that is not a resume, and refuse it BEFORE the LLM call.
+        # "Is a PDF" used to be the whole test, so an invoice or a boarding pass
+        # went straight to generate_questions, which would invent four STAR
+        # questions about it — a wasted call, a cached empty resume, and a
+        # candidate who discovers the problem on /sentry rather than here.
+        #
+        # Logged with the score and the signals that fired, because the only
+        # failure that matters is refusing a REAL resume, and that is impossible
+        # to diagnose from the joke alone.
+        refusal = resume_gate.inspect(resume_text)
+        if refusal:
+            logger.info(
+                f"\U0001f9fe Refused {file.filename}: reads as {refusal['kind']}, "
+                f"{refusal['score']} resume signals "
+                f"({', '.join(refusal['signals']) or 'none'})"
+            )
+            raise HTTPException(status_code=422, detail=refusal["say"])
 
         logger.info(f"\U0001f9e0 Generating questions for resume: {file.filename}")
         questions = await ai_interviewer.generate_questions(resume_text)
