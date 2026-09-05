@@ -10,7 +10,11 @@ import os
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
-load_dotenv()
+# The launcher intentionally starts this process from the repository root, so
+# dotenv's default current-directory lookup misses the backend configuration.
+# Resolve it from this file instead, otherwise the LLM keys and mode are absent
+# in the normal Windows startup path.
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 from ultralytics import YOLO
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, HTTPException, BackgroundTasks, UploadFile
@@ -130,26 +134,57 @@ YOLO_WATCH_CLASSES = [0, 67, 73]
 if os.getenv("BEA_WATCH_LAPTOP", "false").lower() == "true":
     YOLO_WATCH_CLASSES.append(63)
 
-# Confidence floor. Lowered from 0.65 to 0.35 because 0.65 was a recall problem
-# wearing a latency costume: an angled or partly-occluded phone scores 0.35-0.55,
-# so every one of those frames was discarded silently and the prop sweep only
-# fired once the phone came closer or steadier. That reads as a 3-5 s delay when
-# it is really a miss. 0.35 is still above the Ultralytics default of 0.25.
+# Verdict floor: a cell-phone box at or above this accuses the candidate.
+#
+# History, because the number has moved three times and each move looked
+# obviously right at the time:
+#
+#   0.65 -> 0.35   0.65 was a recall problem wearing a latency costume. An
+#                  angled or partly-occluded phone scores 0.35-0.55, so those
+#                  frames were discarded silently and the sweep only fired once
+#                  the phone came closer or steadier — a miss that reads as a
+#                  3-5 s delay.
+#   0.35 -> 0.30   Chosen to claw back a desk phone believed to sit at 0.310,
+#                  just under the gate. That belief came from scoring against
+#                  the `moments` table, which is the detector's own output; the
+#                  frame in question turned out to be a headset, not a phone.
+#   0.30 -> 0.40   Measured against labels.json, where a human has looked at all
+#                  25 frames. The scores separate with an empty band in between:
+#
+#                    real phones   0.453 0.584 0.607 0.627 0.651 0.670 0.685
+#                                  0.688 0.730 0.804 0.815 0.834 0.938
+#                    no phone      0.155 0.215 0.372 | 0.532 0.606
+#
+#                  0.30 sat below that gap and 0.40 sits inside it, so the move
+#                  costs nothing (13/14 phones either way) and drops one false
+#                  accusation: the shadowed edge of a face at 0.372. Precision
+#                  81% -> 87%. Full table in bench_phone_recall.json.
+#
+# 0.40 is NOT a ceiling worth pushing. 0.50 starts losing real phones, and the
+# two false positives that survive — a logo at 0.606 and a laptop screen at
+# 0.532 — sit above any floor that keeps recall, so they are a class problem,
+# not a threshold one. COCO "cell phone" means roughly "lit rectangle in a dark
+# bezel", and a monitor genuinely is one. Threshold tuning is finished here.
 #
 # Object criticals still skip the 3-of-5 debounce (see bea.record_critical_signal).
-# A weaker box is no longer treated as no box, so the single-frame evidence claim
-# now rests on the class being a phone at all, not on the score being high.
-YOLO_CONF = float(os.getenv("BEA_YOLO_CONF", "0.35"))
-# A phone held near the desk/lap occupies few pixels in a 16:9 webcam frame.
-# This phone-only pass is deliberately more sensitive, but it needs two sweeps
-# before escalating so a weak one-frame box cannot become an accusation.
-PHONE_LOWER_CONF = float(os.getenv("BEA_PHONE_LOWER_CONF", "0.20"))
-PHONE_LOWER_CONFIRMATIONS = int(os.getenv("BEA_PHONE_LOWER_CONFIRMATIONS", "2"))
-# The full-frame pass fires at the higher YOLO_CONF floor, but one frame at that
-# floor is still not proof: at 0.35 an over-ear headphone cup, a cable, or a
-# mirror reflection can score as a phone for a single blurry frame. Requiring the
-# same two consecutive sweeps the lower pass uses means a real phone (which stays
-# in shot) still flags in ~2 sweeps, while a one-frame ghost never gets a second.
+YOLO_CONF = float(os.getenv("BEA_YOLO_CONF", "0.40"))
+# Floor for boxes that are DRAWN but never counted.
+#
+# The overlay is the only way to check whether a phone accusation is looking at a
+# phone, and a box that is missing tells you nothing. Detections between this and
+# YOLO_CONF are returned to the frontend marked `fired: false` and drawn dashed:
+# "the detector sees something here and is not acting on it". YOLO drops anything
+# below the conf it is CALLED with, so this — not YOLO_CONF — is the value passed
+# to the model, with YOLO_CONF applied afterwards as the verdict floor.
+PHONE_DRAW_CONF = float(os.getenv("BEA_PHONE_DRAW_CONF", "0.15"))
+# One frame at the floor is still not proof, so the same phone must appear on two
+# consecutive sweeps before escalating. A real phone stays in shot and clears that
+# in ~2 sweeps; a one-frame ghost never gets a second.
+#
+# Note what this canNOT do, learned the hard way: it is a filter against FLICKER,
+# not against a persistent wrong answer. An over-ear headset is the most static
+# object in the frame, so it satisfies "two consecutive sweeps" indefinitely. That
+# is why the fix below is geometric rather than temporal.
 PHONE_FULL_CONFIRMATIONS = int(os.getenv("BEA_PHONE_FULL_CONFIRMATIONS", "2"))
 
 logger.info(f"🔫 YOLOv8s loaded on {device.upper()} | classes={YOLO_WATCH_CLASSES} conf={YOLO_CONF}")
@@ -235,7 +270,8 @@ def determine_verdict(
                     The score used to carry that argument at conf>=0.65, but a
                     high floor discarded angled and partly-occluded phones
                     outright — a recall failure that presented as latency. The
-                    floor is now YOLO_CONF (0.35); a weaker box is a phone seen
+                    floor is now YOLO_CONF, set from measured evidence rather
+                    than feel (see its definition); a weaker box is a phone seen
                     poorly, not the absence of one. What keeps a single frame
                     trustworthy is the class restriction plus the rising-edge
                     latch, which bills one prop once however many sweeps see it.
@@ -676,7 +712,6 @@ _prop_seen: dict[str, bool] = {}
 # empty frame before the same phone can open a second violation.
 PROP_CLEAR_SWEEPS = int(os.getenv("BEA_PROP_CLEAR_SWEEPS", "3"))
 _prop_clear_streak: dict[str, int] = {}
-_phone_lower_streak: dict[str, int] = {}
 _phone_full_streak: dict[str, int] = {}
 
 # A SECOND tracker, deliberately not the telemetry one.
@@ -706,6 +741,55 @@ def _detect_objects(results, names: dict, min_conf: float = 0.0) -> list[str]:
     return detected
 
 
+def _detect_boxes(
+    results,
+    names: dict,
+    min_conf: float,
+    *,
+    source: str,
+    frame_width: int,
+    frame_height: int,
+) -> list[dict]:
+    """Return detection boxes in normalized frame coordinates, for drawing.
+
+    Exists alongside _detect_objects because the verdict only needs labels, but a
+    human checking the verdict needs to see what was boxed. "cell phone (51%)"
+    reads identically whether YOLO found a phone or an over-ear headphone cup, so
+    a phone accusation with no box on screen is unfalsifiable from the UI. Drawing
+    the box is what turned "it says phone and there is no phone" from an argument
+    into a measurement.
+
+    Normalized rather than pixel coords so the overlay scales to whatever the
+    video element is showing, instead of assuming the 640x360 the sweep sends.
+
+    `fired` records whether the box cleared YOLO_CONF and so counted toward the
+    verdict. Boxes between PHONE_DRAW_CONF and YOLO_CONF are still returned, so a
+    near miss shows up as a near miss instead of as nothing at all. The model is
+    called at PHONE_DRAW_CONF, which is therefore the hard visibility limit here:
+    anything below it was dropped inside YOLO and cannot be drawn.
+    """
+    boxes = []
+    for result in results:
+        for box in result.boxes:
+            confidence = float(box.conf[0])
+            x1, y1, x2, y2 = (float(v) for v in box.xyxy[0])
+            boxes.append(
+                {
+                    "label": names[int(box.cls[0])],
+                    "conf": round(confidence, 3),
+                    "source": source,
+                    "fired": confidence >= min_conf,
+                    "box": [
+                        round(x1 / frame_width, 4),
+                        round(y1 / frame_height, 4),
+                        round(x2 / frame_width, 4),
+                        round(y2 / frame_height, 4),
+                    ],
+                }
+            )
+    return boxes
+
+
 @app.post("/api/v1/scan-objects")
 async def scan_objects(payload: ObjectScanPayload, background_tasks: BackgroundTasks):
     """YOLO-only sweep that runs several times faster than the telemetry loop.
@@ -731,53 +815,80 @@ async def scan_objects(payload: ObjectScanPayload, background_tasks: BackgroundT
         raise HTTPException(status_code=400, detail="Invalid image payload.")
 
     loop = asyncio.get_running_loop()
-    # An enlarged centre/lower crop targets the place a candidate most
-    # often holds a phone. Cropping makes a small device occupy more of YOLO's
-    # fixed inference canvas. It only searches the phone class and requires two
-    # consecutive sweeps, preserving the stricter full-frame evidence rule.
+    # ONE full-frame pass. There used to be two extra magnified crops of the lower
+    # field, on the theory that a phone on the desk occupies too few pixels to
+    # score well at full frame. Measured over 25 evidence frames that a human has
+    # since labelled one by one (labels.json — 14 real phones, 11 with no phone),
+    # that theory cost far more than it bought:
+    #
+    #   config                          real phones    false accusations    ms
+    #   full + lower tiles @0.20          14 of 14        11 of 11         383
+    #   full + lower tiles @0.35          14 of 14         6 of 11         383
+    #   full frame only    @0.40          13 of 14         2 of 11          76
+    #
+    # At the floor the tile pass actually shipped with, it accused every single
+    # candidate who was not holding a phone. All eleven. Upscaling a 400x240 crop
+    # 1.6x does not just magnify a phone, it magnifies an over-ear headphone cup
+    # and the shadowed edge of a face into exactly the dark rounded rectangle
+    # COCO's "cell phone" class was trained on, lifting them from ~0.2 (correctly
+    # ignored at full frame) into the 0.41-0.49 band where real phones live.
+    #
+    # Thirteen further geometries were swept — narrower tiles, 2x2 grids, lower
+    # thirds, imgsz 960, CLAHE, 2x pre-upscale, yolov8n. None beat one full-frame
+    # pass on the recall/false-accusation trade, and the six that tie it cost 3-9x
+    # the compute for a bit-identical answer (bench_phone_recall.json).
+    #
+    # Two of those results are worth knowing before reaching for the obvious idea:
+    #   - Pre-upscaling 2x is a NO-OP. It measures identically to plain full frame
+    #     because LetterBox scales whatever you send back down to imgsz, so what
+    #     the model sees is the object's size AFTER that scaling, never the input
+    #     resolution. Every "just upscale it first" variant is this same no-op.
+    #   - imgsz=960 is actively worse (10 of 14, 4 of 11). Interpolating detail
+    #     that was destroyed at capture does not restore it.
+    #
+    # The one phone this loses scores 0.000 here — no box at all, so no floor
+    # anywhere recovers it. Magnification DOES reach it (the tile pass finds 14 of
+    # 14), so this is not purely a resolution wall; it is just not worth 11 false
+    # accusations and 5x the latency. The honest fix is real pixels: the sweep
+    # downscales a 1280x720 capture to 640x360 before sending, and this phone does
+    # not survive that. A fine-tune that knows a headset from a handset would also
+    # do it. Both are worth doing; neither is a reason to keep accusing candidates
+    # of holding their own headphones.
     height, width = image.shape[:2]
-    crop_top = height // 3
-    tile_width = (width * 5) // 8
-    lower_left = image[crop_top:height, 0:tile_width]
-    lower_right = image[crop_top:height, width - tile_width:width]
-    batched_results = await loop.run_in_executor(
+    full_results = await loop.run_in_executor(
         app.state.prop_executor,
         lambda: yolo_model_prop(
-            [image, lower_left, lower_right],
+            image,
             verbose=False,
             classes=YOLO_PROP_CLASSES,
             imgsz=640,
             augment=False,
-            conf=PHONE_LOWER_CONF,
+            conf=PHONE_DRAW_CONF,
         ),
     )
-    full_results = batched_results[:1]
-    lower_results = batched_results[1:3]
     detected_objects = _detect_objects(
         full_results, yolo_model_prop.names, min_conf=YOLO_CONF
     )
     full_phone_detected = any("cell phone" in o.lower() for o in detected_objects)
-    lower_phone_detected = any(
-        "cell phone" in label.lower()
-        for label in _detect_objects(
-            lower_results, yolo_model_prop.names, min_conf=PHONE_LOWER_CONF
-        )
+
+    # Every box the model returned, including those below YOLO_CONF, so the
+    # overlay can show a near miss as a near miss instead of as nothing.
+    detection_boxes = _detect_boxes(
+        full_results,
+        yolo_model_prop.names,
+        YOLO_CONF,
+        source="full",
+        frame_width=width,
+        frame_height=height,
     )
-    # Both phone passes require the SAME phone on two consecutive sweeps before
-    # escalating. A phone actually in shot clears that in ~2 sweeps and then stays
-    # flagged; a single frame at the confidence floor — a headphone cup, a cable,
-    # a reflection — never gets a second sweep to agree, so it can no longer open a
-    # permanent violation on its own. Either streak resets to 0 on a clean sweep,
-    # so the two sightings must be genuinely consecutive, not merely two-in-a-run.
+    # The same phone must appear on two consecutive sweeps before escalating. The
+    # streak resets to 0 on any clean sweep, so the two sightings must be genuinely
+    # consecutive rather than merely two in a run.
     full_streak = _phone_full_streak.get(bea_key, 0)
     _phone_full_streak[bea_key] = full_streak + 1 if full_phone_detected else 0
-    lower_streak = _phone_lower_streak.get(bea_key, 0)
-    _phone_lower_streak[bea_key] = lower_streak + 1 if lower_phone_detected else 0
 
     if _phone_full_streak[bea_key] >= PHONE_FULL_CONFIRMATIONS:
         verdict = "CRITICAL: Mobile device detected in frame."
-    elif _phone_lower_streak[bea_key] >= PHONE_LOWER_CONFIRMATIONS:
-        verdict = "CRITICAL: Mobile device detected in lower camera field."
     elif any("book" in o.lower() or "laptop" in o.lower() for o in detected_objects):
         verdict = "CRITICAL: Prohibited item detected on desk."
     else:
@@ -829,6 +940,11 @@ async def scan_objects(payload: ObjectScanPayload, background_tasks: BackgroundT
             "detected": verdict is not None,
             "escalated": False,
             "objects": detected_objects,
+            # Sent on the quiet path too. This is the sweep that runs while a
+            # phone banner is already up (the `was_seen` latch) and the sweep that
+            # runs when nothing is found at all — the two cases where "what is it
+            # boxing?" is the actual question being asked.
+            "boxes": detection_boxes,
         }
 
     logger.info(f"🔫 PROP SWEEP: {detected_objects} → escalating")
@@ -837,7 +953,12 @@ async def scan_objects(payload: ObjectScanPayload, background_tasks: BackgroundT
         bea_key, True, verdict, instant=True
     )
     if not decision["confirmed"]:
-        return {"detected": True, "escalated": False, "objects": detected_objects}
+        return {
+            "detected": True,
+            "escalated": False,
+            "objects": detected_objects,
+            "boxes": detection_boxes,
+        }
 
     consolidated = "; ".join(decision["pending_reasons"]) or verdict
     risk_packet = await bea_engine.record_violation(bea_key, reason=consolidated)
@@ -865,6 +986,7 @@ async def scan_objects(payload: ObjectScanPayload, background_tasks: BackgroundT
         "detected": True,
         "escalated": True,
         "objects": detected_objects,
+        "boxes": detection_boxes,
         "verdict": verdict_text,
         # Reached only past the `was_seen` latch and the confirmation gate above,
         # so this is the first confirmed sweep of a newly-appeared prop — the
@@ -1404,7 +1526,6 @@ async def reset_session(candidate_id: str):
     # never re-flag for the rest of the run.
     _prop_seen.pop(candidate_id, None)
     _prop_clear_streak.pop(candidate_id, None)
-    _phone_lower_streak.pop(candidate_id, None)
     _phone_full_streak.pop(candidate_id, None)
     # Drop open episodes rather than closing them. "Clear memory" means the run
     # is being discarded, so writing an end time and duration for a stretch the

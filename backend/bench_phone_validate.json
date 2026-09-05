@@ -1,0 +1,497 @@
+[
+  {
+    "n": 1,
+    "file": "resume_26dc8fecc2d8bf2d73f98e960a2cc22ed9387345d1018f87b753fd6ab9909137__4e7e66f2e9c3_1787294257844_0b275b39.jpg",
+    "best_phone_conf": 0.0,
+    "accuses": false,
+    "verified": true,
+    "phone_present": true,
+    "boxes": []
+  },
+  {
+    "n": 2,
+    "file": "resume_26dc8fecc2d8bf2d73f98e960a2cc22ed9387345d1018f87b753fd6ab9909137__b08b4a21744b_1786987815022_2c0edf70.jpg",
+    "best_phone_conf": 0.67,
+    "accuses": true,
+    "verified": true,
+    "phone_present": true,
+    "boxes": [
+      {
+        "label": "cell phone",
+        "conf": 0.67,
+        "source": "full",
+        "fired": true,
+        "box": [
+          0.2173,
+          0.7506,
+          0.392,
+          0.9981
+        ]
+      }
+    ]
+  },
+  {
+    "n": 3,
+    "file": "resume_3a38482151f786d315f7aaa0f38c2892321ad8cbf9fd9554361f22a98f0e3fe0__cf2874210e63_1787217322033_ea2cb142.jpg",
+    "best_phone_conf": 0.804,
+    "accuses": true,
+    "verified": true,
+    "phone_present": true,
+    "boxes": [
+      {
+        "label": "cell phone",
+        "conf": 0.804,
+        "source": "full",
+        "fired": true,
+        "box": [
+          0.3822,
+          0.9204,
+          0.5151,
+          1.0
+        ]
+      }
+    ]
+  },
+  {
+    "n": 4,
+    "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__1a5623d1de60_1788579563475_04d3157b.jpg",
+    "best_phone_conf": 0.0,
+    "accuses": false,
+    "verified": true,
+    "phone_present": false,
+    "boxes": []
+  },
+  {
+    "n": 5,
+    "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__1a5623d1de60_1788579578705_4aa9cae7.jpg",
+    "best_phone_conf": 0.155,
+    "accuses": false,
+    "verified": true,
+    "phone_present": false,
+    "boxes": [
+      {
+        "label": "cell phone",
+        "conf": 0.155,
+        "source": "full",
+        "fired": false,
+        "box": [
+          0.4338,
+          0.4213,
+          0.4833,
+          0.5801
+        ]
+      }
+    ]
+  },
+  {
+    "n": 6,
+    "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__744b0f853a70_1788582383240_bc9bead5.jpg",
+    "best_phone_conf": 0.0,
+    "accuses": false,
+    "verified": true,
+    "phone_present": false,
+    "boxes": []
+  },
+  {
+    "n": 7,
+    "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__828dd5d602ca_1787556183513_4f964524.jpg",
+    "best_phone_conf": 0.938,
+    "accuses": true,
+    "verified": true,
+    "phone_present": true,
+    "boxes": [
+      {
+        "label": "cell phone",
+        "conf": 0.938,
+        "source": "full",
+        "fired": true,
+        "box": [
+          0.1449,
+          0.0776,
+          0.5869,
+          0.9885
+        ]
+      }
+    ]
+  },
+  {
+    "n": 8,
+    "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__84eea2f807e4_1788580842993_24f44f30.jpg",
+    "best_phone_conf": 0.0,
+    "accuses": false,
+    "verified": true,
+    "phone_present": false,
+    "boxes": []
+  },
+  {
+    "n": 9,
+    "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__84eea2f807e4_1788580869407_eb4c63d1.jpg",
+    "best_phone_conf": 0.0,
+    "accuses": false,
+    "verified": true,
+    "phone_present": false,
+    "boxes": []
+  },
+  {
+    "n": 10,
+    "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__84eea2f807e4_1788580926121_bbd4432f.jpg",
+    "best_phone_conf": 0.0,
+    "accuses": false,
+    "verified": true,
+    "phone_present": false,
+    "boxes": []
+  },
+  {
+    "n": 11,
+    "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__84eea2f807e4_1788580939315_e7261eed.jpg",
+    "best_phone_conf": 0.0,
+    "accuses": false,
+    "verified": true,
+    "phone_present": false,
+    "boxes": []
+  },
+  {
+    "n": 12,
+    "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__84eea2f807e4_1788580960515_9c3145f0.jpg",
+    "best_phone_conf": 0.215,
+    "accuses": false,
+    "verified": true,
+    "phone_present": false,
+    "boxes": [
+      {
+        "label": "cell phone",
+        "conf": 0.215,
+        "source": "full",
+        "fired": false,
+        "box": [
+          0.3644,
+          0.3785,
+          0.4334,
+          0.5796
+        ]
+      }
+    ]
+  },
+  {
+    "n": 13,
+    "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__b0bb0996353b_1787556631131_95048f53.jpg",
+    "best_phone_conf": 0.372,
+    "accuses": false,
+    "verified": true,
+    "phone_present": false,
+    "boxes": [
+      {
+        "label": "cell phone",
+        "conf": 0.372,
+        "source": "full",
+        "fired": false,
+        "box": [
+          0.6589,
+          0.4572,
+          0.7187,
+          0.6677
+        ]
+      }
+    ]
+  },
+  {
+    "n": 14,
+    "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__20148fdc5569_1787582659970_5e8627de.jpg",
+    "best_phone_conf": 0.606,
+    "accuses": true,
+    "verified": true,
+    "phone_present": false,
+    "boxes": [
+      {
+        "label": "cell phone",
+        "conf": 0.606,
+        "source": "full",
+        "fired": true,
+        "box": [
+          0.5961,
+          0.8914,
+          0.6495,
+          0.9974
+        ]
+      },
+      {
+        "label": "cell phone",
+        "conf": 0.188,
+        "source": "full",
+        "fired": false,
+        "box": [
+          0.6111,
+          0.472,
+          0.6369,
+          0.6247
+        ]
+      },
+      {
+        "label": "cell phone",
+        "conf": 0.17,
+        "source": "full",
+        "fired": false,
+        "box": [
+          0.5781,
+          0.4694,
+          0.6379,
+          0.6219
+        ]
+      }
+    ]
+  },
+  {
+    "n": 15,
+    "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__cdf7d4cd3354_1787583940396_20ce51bc.jpg",
+    "best_phone_conf": 0.532,
+    "accuses": true,
+    "verified": true,
+    "phone_present": false,
+    "boxes": [
+      {
+        "label": "cell phone",
+        "conf": 0.532,
+        "source": "full",
+        "fired": true,
+        "box": [
+          0.204,
+          0.8304,
+          0.3451,
+          0.9969
+        ]
+      }
+    ]
+  },
+  {
+    "n": 16,
+    "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__e5c4906d4b43_1787191270289_14e26ca8.jpg",
+    "best_phone_conf": 0.584,
+    "accuses": true,
+    "verified": true,
+    "phone_present": true,
+    "boxes": [
+      {
+        "label": "cell phone",
+        "conf": 0.584,
+        "source": "full",
+        "fired": true,
+        "box": [
+          0.3887,
+          0.4521,
+          0.4685,
+          0.697
+        ]
+      }
+    ]
+  },
+  {
+    "n": 17,
+    "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__e5c4906d4b43_1787191286933_28d762e2.jpg",
+    "best_phone_conf": 0.453,
+    "accuses": true,
+    "verified": true,
+    "phone_present": true,
+    "boxes": [
+      {
+        "label": "cell phone",
+        "conf": 0.453,
+        "source": "full",
+        "fired": true,
+        "box": [
+          0.56,
+          0.67,
+          0.6617,
+          0.9917
+        ]
+      }
+    ]
+  },
+  {
+    "n": 18,
+    "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__e5c4906d4b43_1787191396139_61a4e94e.jpg",
+    "best_phone_conf": 0.607,
+    "accuses": true,
+    "verified": true,
+    "phone_present": true,
+    "boxes": [
+      {
+        "label": "cell phone",
+        "conf": 0.607,
+        "source": "full",
+        "fired": true,
+        "box": [
+          0.5033,
+          0.7444,
+          0.5757,
+          0.9765
+        ]
+      }
+    ]
+  },
+  {
+    "n": 19,
+    "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__e5c4906d4b43_1787191421318_5659d5da.jpg",
+    "best_phone_conf": 0.651,
+    "accuses": true,
+    "verified": true,
+    "phone_present": true,
+    "boxes": [
+      {
+        "label": "cell phone",
+        "conf": 0.651,
+        "source": "full",
+        "fired": true,
+        "box": [
+          0.3678,
+          0.6928,
+          0.4997,
+          0.996
+        ]
+      }
+    ]
+  },
+  {
+    "n": 20,
+    "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__e5c4906d4b43_1787191790042_833bb734.jpg",
+    "best_phone_conf": 0.834,
+    "accuses": true,
+    "verified": true,
+    "phone_present": true,
+    "boxes": [
+      {
+        "label": "cell phone",
+        "conf": 0.834,
+        "source": "full",
+        "fired": true,
+        "box": [
+          0.3841,
+          0.5062,
+          0.4801,
+          0.8022
+        ]
+      },
+      {
+        "label": "cell phone",
+        "conf": 0.25,
+        "source": "full",
+        "fired": false,
+        "box": [
+          0.3843,
+          0.5054,
+          0.4816,
+          0.999
+        ]
+      }
+    ]
+  },
+  {
+    "n": 21,
+    "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__e5c4906d4b43_1787191806545_544e9617.jpg",
+    "best_phone_conf": 0.73,
+    "accuses": true,
+    "verified": true,
+    "phone_present": true,
+    "boxes": [
+      {
+        "label": "cell phone",
+        "conf": 0.73,
+        "source": "full",
+        "fired": true,
+        "box": [
+          0.5167,
+          0.6541,
+          0.6359,
+          0.9977
+        ]
+      }
+    ]
+  },
+  {
+    "n": 22,
+    "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__e5c4906d4b43_1787191819089_02ea6255.jpg",
+    "best_phone_conf": 0.685,
+    "accuses": true,
+    "verified": true,
+    "phone_present": true,
+    "boxes": [
+      {
+        "label": "cell phone",
+        "conf": 0.685,
+        "source": "full",
+        "fired": true,
+        "box": [
+          0.4704,
+          0.5698,
+          0.5864,
+          0.9964
+        ]
+      }
+    ]
+  },
+  {
+    "n": 23,
+    "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__e5c4906d4b43_1787191840007_10b7b70e.jpg",
+    "best_phone_conf": 0.815,
+    "accuses": true,
+    "verified": true,
+    "phone_present": true,
+    "boxes": [
+      {
+        "label": "cell phone",
+        "conf": 0.815,
+        "source": "full",
+        "fired": true,
+        "box": [
+          0.397,
+          0.6481,
+          0.5219,
+          0.9962
+        ]
+      }
+    ]
+  },
+  {
+    "n": 24,
+    "file": "resume_c8663e0836efeea37f7f17cec272bda1a5eea0ef8d49caeb25aca4a17194d58f__062f882cff8c_1787556984185_a4319f36.jpg",
+    "best_phone_conf": 0.627,
+    "accuses": true,
+    "verified": true,
+    "phone_present": true,
+    "boxes": [
+      {
+        "label": "cell phone",
+        "conf": 0.627,
+        "source": "full",
+        "fired": true,
+        "box": [
+          0.0863,
+          0.5784,
+          0.2439,
+          0.9715
+        ]
+      }
+    ]
+  },
+  {
+    "n": 25,
+    "file": "resume_c8663e0836efeea37f7f17cec272bda1a5eea0ef8d49caeb25aca4a17194d58f__062f882cff8c_1787557028973_360b86a2.jpg",
+    "best_phone_conf": 0.688,
+    "accuses": true,
+    "verified": true,
+    "phone_present": true,
+    "boxes": [
+      {
+        "label": "cell phone",
+        "conf": 0.688,
+        "source": "full",
+        "fired": true,
+        "box": [
+          0.3117,
+          0.8563,
+          0.5052,
+          1.0
+        ]
+      }
+    ]
+  }
+]

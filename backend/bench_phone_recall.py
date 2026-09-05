@@ -6,12 +6,22 @@ miss reads as a 5 s delay because the slower telemetry loop eventually catches
 what the fast sweep dropped. This script exists to pick the tiling geometry and
 confidence floors on evidence rather than by feel.
 
-Ground truth is the `moments` table: rows with kind='MOBILE_DEVICE' are frames
-the deployed system already confirmed a phone in, so a config that cannot find
-them is strictly worse than what ships today. Frames behind any other kind are
-the negative pool — imperfect (a phone can be in shot without having opened a
-MOBILE_DEVICE episode) so a "false positive" here is a candidate to eyeball, not
-a proven error.
+Ground truth is labels.json, written by a human looking at pixels.
+
+It used to be the `moments` table — rows with kind='MOBILE_DEVICE', on the
+reasoning that those are frames the deployed system already confirmed a phone
+in. That reasoning is circular, and it cost real time. Those rows are the
+detector's OUTPUT, so scoring against them grades the detector on agreeing with
+itself, and it agreed with itself while being wrong: nine of the twenty-five
+contain no phone, only an over-ear headset or the shadowed edge of a face. Run
+that way, this harness scored the config that fixed the false positives as a 36%
+recall REGRESSION and the config that caused them as perfect. A harness that
+ranks the bug above the fix is not a slow harness, it is an inverted one.
+
+So: frames a human has verified are scored, frames nobody has looked at are
+excluded and counted out loud. Frames behind other `moments` kinds are kept as a
+separate unlabelled control — broad, useful for spotting a config that fires on
+everything, but a fire there is a candidate to eyeball, not a proven error.
 
 Run:  ../venv/Scripts/python.exe bench_phone_recall.py
 """
@@ -30,38 +40,65 @@ from ultralytics import YOLO
 HERE = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.join(HERE, "guard_telemetry.db")
 EVIDENCE = os.path.join(HERE, "evidence")
+LABELS = os.path.join(HERE, "labels.json")
 
 PHONE = "cell phone"
 # 67 = cell phone, 73 = book. Person is excluded exactly as in the prop sweep.
 CLASSES = [67, 73]
 
 
-def load_sets() -> tuple[list[str], list[str]]:
+def load_sets() -> tuple[list[str], list[str], list[str], list[str]]:
+    """Return (verified phone, verified no-phone, unverified, unlabelled control).
+
+    The first two are what the scores are computed from. The third is returned
+    rather than silently folded into either, because "we have not checked" and
+    "there is no phone" are different facts and only one of them is knowledge.
+    """
     on_disk = {
         os.path.basename(f): f for f in glob.glob(os.path.join(EVIDENCE, "*.jpg"))
     }
-    con = sqlite3.connect(DB)
-    rows = con.execute(
-        "select evidence_url, kind from moments where kind is not null"
-    ).fetchall()
-    con.close()
 
-    pos, neg = [], []
-    for url, kind in rows:
-        path = on_disk.get(os.path.basename(url or ""))
+    with open(LABELS, encoding="utf-8") as fh:
+        frames = json.load(fh)["frames"]
+
+    pos, neg, unver = [], [], []
+    for rec in frames:
+        path = on_disk.get(rec["file"])
         if not path:
             continue
-        (pos if kind == "MOBILE_DEVICE" else neg).append(path)
-    return sorted(set(pos)), sorted(set(neg))
+        if not rec["verified"]:
+            unver.append(path)
+        elif rec["phone_present"]:
+            pos.append(path)
+        else:
+            neg.append(path)
+
+    labelled = {os.path.basename(p) for p in pos + neg + unver}
+    con = sqlite3.connect(DB)
+    rows = con.execute(
+        "select evidence_url from moments where kind is not null and kind != 'MOBILE_DEVICE'"
+    ).fetchall()
+    con.close()
+    control = sorted(
+        {
+            on_disk[b]
+            for (u,) in rows
+            if (b := os.path.basename(u or "")) in on_disk and b not in labelled
+        }
+    )
+    return sorted(pos), sorted(neg), sorted(unver), control
 
 
 def tiles_for(img, strategy: str):
     """Return the batch of images one sweep would send for a given geometry."""
     h, w = img.shape[:2]
     if strategy == "full":
+        # What ships today: one full-frame pass, no tiles. Every tile geometry
+        # below is kept so the decision stays re-runnable, not because any of
+        # them is a candidate — see the note above `configs`.
         return [img]
     if strategy == "prod":
-        # What ships today: lower 2/3, two 5/8-width tiles, left and right.
+        # What USED to ship: lower 2/3, two 5/8-width tiles, left and right.
         top, tw = h // 3, (w * 5) // 8
         return [img, img[top:h, 0:tw], img[top:h, w - tw : w]]
     if strategy == "prod-half":
@@ -120,17 +157,21 @@ def best_phone(model, batch, imgsz: int) -> tuple[float, float, float]:
 
 
 def main() -> None:
-    pos, neg = load_sets()
-    print(f"positives (confirmed MOBILE_DEVICE): {len(pos)}")
-    print(f"negatives (other kinds):             {len(neg)}")
+    pos, neg, unver, control = load_sets()
+    print(f"verified phone present:   {len(pos)}")
+    print(f"verified no phone:        {len(neg)}")
+    print(f"unverified (EXCLUDED):    {len(unver)}")
+    print(f"unlabelled control:       {len(control)}")
     dims = Counter()
-    for f in pos + neg:
+    for f in pos + neg + unver:
         im = cv2.imread(f)
         if im is not None:
             dims[im.shape[:2]] += 1
     print(f"frame sizes: {dims.most_common(4)}\n")
-    if not pos:
-        print("No positive frames resolved — nothing to measure. Stopping.")
+    if not pos or not neg:
+        print("Need verified frames on BOTH sides — a recall number with no false-")
+        print("positive number beside it is what got the tile pass shipped. Label")
+        print("more frames in labels.json (bench_phone_validate.py --sheet) first.")
         return
 
     models = {}
@@ -139,70 +180,87 @@ def main() -> None:
         if os.path.exists(p):
             models[tag] = YOLO(p)
 
+    # The tile geometries are kept deliberately. They lost — every head-region
+    # tile detection in the evidence set was false — and keeping the losers in
+    # the sweep is what lets the next person re-derive that in one command
+    # instead of re-inventing the idea and shipping it again.
     configs = [
         # (model, strategy, imgsz, enhance)
-        ("8s", "prod", 640, "none"),          # what ships today — the baseline
+        ("8s", "full", 640, "none"),          # what ships today — the baseline
+        ("8s", "prod", 640, "none"),          # the tile pass this replaced
         ("8s", "prod-half", 640, "none"),
         ("8s", "grid2x2", 640, "none"),
         ("8s", "lower3", 640, "none"),
         ("8s", "centre-lower", 640, "none"),
+        ("8s", "full", 960, "none"),
         ("8s", "prod", 960, "none"),
-        ("8s", "prod-half", 960, "none"),
         ("8s", "grid2x2", 960, "none"),
+        ("8s", "full", 640, "clahe"),
         ("8s", "prod", 640, "clahe"),
-        ("8s", "grid2x2", 640, "clahe"),
-        ("8s", "prod", 640, "upscale2x"),
+        ("8s", "full", 640, "upscale2x"),
         ("8s", "grid2x2", 640, "upscale2x"),
+        ("8n", "full", 640, "none"),
         ("8n", "prod", 640, "none"),
-        ("8n", "grid2x2", 640, "none"),
-        ("8n", "grid2x2", 960, "none"),
     ]
 
-    # Floors worth reporting recall at. 0.35/0.20 are today's production values.
-    floors = [0.35, 0.20, 0.15, 0.10]
+    # Floors worth reporting at. 0.40 is today's production verdict floor, chosen
+    # because the verified scores leave an empty band between 0.372 and 0.453 and
+    # it sits inside it. 0.15 is the floor the model is CALLED at, below which
+    # nothing is even drawn. The two either side of 0.40 are there to show the
+    # cost of moving it: 0.30 buys nothing and 0.50 starts losing real phones.
+    floors = [0.50, 0.40, 0.30, 0.15]
     results = []
 
     for mtag, strategy, imgsz, enh in configs:
         if mtag not in models:
             continue
         model = models[mtag]
-        scores_pos, scores_neg, times = [], [], []
-        for path, bucket in ((p, scores_pos) for p in pos):
-            img = cv2.imread(path)
-            if img is None:
-                continue
-            img = enhance(img, enh)
-            ms, f, t = best_phone(model, tiles_for(img, strategy), imgsz)
-            times.append(ms)
-            bucket.append(max(f, t))
-        for path in neg:
-            img = enhance(cv2.imread(path), enh)
-            _, f, t = best_phone(model, tiles_for(img, strategy), imgsz)
-            scores_neg.append(max(f, t))
+        scored = {"pos": [], "neg": [], "control": []}
+        times = []
+        for name, paths in (("pos", pos), ("neg", neg), ("control", control)):
+            for path in paths:
+                img = cv2.imread(path)
+                if img is None:
+                    continue
+                img = enhance(img, enh)
+                ms, f, t = best_phone(model, tiles_for(img, strategy), imgsz)
+                if name == "pos":
+                    times.append(ms)
+                scored[name].append(max(f, t))
 
         med_ms = sorted(times)[len(times) // 2] if times else 0
         row = {
             "config": f"{mtag} {strategy} imgsz={imgsz} {enh}",
             "ms": med_ms,
+            "n": {k: len(v) for k, v in scored.items()},
             "recall": {
-                f: sum(1 for s in scores_pos if s >= f) / len(scores_pos)
+                f: sum(1 for s in scored["pos"] if s >= f) / len(scored["pos"])
                 for f in floors
             },
-            "fp": {
-                f: sum(1 for s in scores_neg if s >= f) / max(1, len(scores_neg))
+            "false_accusation": {
+                f: sum(1 for s in scored["neg"] if s >= f) / len(scored["neg"])
+                for f in floors
+            },
+            "control_fire": {
+                f: sum(1 for s in scored["control"] if s >= f)
+                / max(1, len(scored["control"]))
                 for f in floors
             },
         }
         results.append(row)
-        rec = "  ".join(f"@{f}={row['recall'][f]:.0%}" for f in floors)
-        fp = "  ".join(f"@{f}={row['fp'][f]:.0%}" for f in floors)
         print(f"{row['config']:34} {med_ms:6.0f}ms")
-        print(f"    recall {rec}")
-        print(f"    fp     {fp}")
+        # Recall and false accusations on the same screen, always. Reading one
+        # without the other is exactly the mistake this file used to encourage.
+        for key, caption in (
+            ("recall", "recall  "),
+            ("false_accusation", "FALSE   "),
+            ("control_fire", "control "),
+        ):
+            print(f"    {caption}" + "  ".join(f"@{f}={row[key][f]:.0%}" for f in floors))
 
     with open(os.path.join(HERE, "bench_phone_recall.json"), "w") as fh:
         json.dump(results, fh, indent=2)
-    print("\nwrote bench_phone_recall.json")
+    print(f"\nwrote bench_phone_recall.json  ({len(unver)} unverified frames excluded)")
 
 
 if __name__ == "__main__":

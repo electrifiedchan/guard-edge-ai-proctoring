@@ -1,0 +1,200 @@
+{
+  "version": 1,
+  "subject": "presence of a real mobile phone in frame",
+  "why": [
+    "The moments table is NOT ground truth. Every row in it with kind='MOBILE_DEVICE' is a",
+    "detector OUTPUT — the thing under test — so scoring the detector against it scores the",
+    "detector against its own opinion. Nine of these twenty-five frames contain no phone at",
+    "all; they are the over-ear headset and shadowed-face-edge false positives the lower-tile",
+    "pass produced. A harness that reads the moments table as truth therefore rewards the bug",
+    "and reports the fix for it as a 36% recall regression.",
+    "",
+    "So the labels live here instead, in a file a human can open and argue with. 'verified'",
+    "means a person looked at the pixels and said so. It is the difference between a number",
+    "that means something and a number that only looks like it does."
+  ],
+  "how_to_add": [
+    "Run bench_phone_validate.py --sheet. It renders every frame with the box drawn and a",
+    "#N caption. Look at each one, then set phone_present and flip verified to true. Frames",
+    "left unverified are excluded from the scores rather than guessed at — an unlabelled",
+    "frame is a frame nobody has checked, and averaging over guesses is how the moments",
+    "table got trusted in the first place."
+  ],
+  "frames": [
+    {
+      "n": 1,
+      "file": "resume_26dc8fecc2d8bf2d73f98e960a2cc22ed9387345d1018f87b753fd6ab9909137__4e7e66f2e9c3_1787294257844_0b275b39.jpg",
+      "phone_present": true,
+      "verified": true,
+      "note": "Real phone, held in hand, confirmed by review — and the full-frame pass scores 0.000 on it. Not 'just under the floor': there is no box at all, so no threshold anywhere recovers this one. It sits in the moments table only because the deleted lower-tile pass caught it, which makes it the single genuine regression from removing the tiles. This is the frame that justifies the native-720p capture path: the sweep currently downscales a 1280x720 capture to 640x360 before sending, and this phone does not survive that."
+    },
+    {
+      "n": 2,
+      "file": "resume_26dc8fecc2d8bf2d73f98e960a2cc22ed9387345d1018f87b753fd6ab9909137__b08b4a21744b_1786987815022_2c0edf70.jpg",
+      "phone_present": true,
+      "verified": true,
+      "note": "Real phone, held in hand. Confirmed by review."
+    },
+    {
+      "n": 3,
+      "file": "resume_3a38482151f786d315f7aaa0f38c2892321ad8cbf9fd9554361f22a98f0e3fe0__cf2874210e63_1787217322033_ea2cb142.jpg",
+      "phone_present": true,
+      "verified": true,
+      "note": "Real phone, held in hand. Confirmed by review."
+    },
+    {
+      "n": 4,
+      "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__1a5623d1de60_1788579563475_04d3157b.jpg",
+      "phone_present": false,
+      "verified": true,
+      "note": "Head region. Over-ear headphone cup read as a phone by the 1.6x-magnified lower tile."
+    },
+    {
+      "n": 5,
+      "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__1a5623d1de60_1788579578705_4aa9cae7.jpg",
+      "phone_present": false,
+      "verified": true,
+      "note": "Head region. Headset."
+    },
+    {
+      "n": 6,
+      "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__744b0f853a70_1788582383240_bc9bead5.jpg",
+      "phone_present": false,
+      "verified": true,
+      "note": "Head region. Headset."
+    },
+    {
+      "n": 7,
+      "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__828dd5d602ca_1787556183513_4f964524.jpg",
+      "phone_present": true,
+      "verified": true,
+      "note": "Real phone. One of only two true positives among the eleven head-region frames."
+    },
+    {
+      "n": 8,
+      "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__84eea2f807e4_1788580842993_24f44f30.jpg",
+      "phone_present": false,
+      "verified": true,
+      "note": "Head region. Headset."
+    },
+    {
+      "n": 9,
+      "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__84eea2f807e4_1788580869407_eb4c63d1.jpg",
+      "phone_present": false,
+      "verified": true,
+      "note": "Head region. Headset."
+    },
+    {
+      "n": 10,
+      "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__84eea2f807e4_1788580926121_bbd4432f.jpg",
+      "phone_present": false,
+      "verified": true,
+      "note": "Head region. Headset."
+    },
+    {
+      "n": 11,
+      "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__84eea2f807e4_1788580939315_e7261eed.jpg",
+      "phone_present": false,
+      "verified": true,
+      "note": "Head region. Headset."
+    },
+    {
+      "n": 12,
+      "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__84eea2f807e4_1788580960515_9c3145f0.jpg",
+      "phone_present": false,
+      "verified": true,
+      "note": "Head region. Headset."
+    },
+    {
+      "n": 13,
+      "file": "resume_64d4ff1a29f6bf281259e362ed711729dfb4309e2d1195dfce4b27ca74f5fbb6__b0bb0996353b_1787556631131_95048f53.jpg",
+      "phone_present": false,
+      "verified": true,
+      "note": "Shadowed edge of the face. The one false positive the full-frame pass still fires on (0.436) — the tiles are not the whole story, just most of it."
+    },
+    {
+      "n": 14,
+      "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__20148fdc5569_1787582659970_5e8627de.jpg",
+      "phone_present": false,
+      "verified": true,
+      "note": "No phone. The 0.61 box is on a small round logo/badge low in frame — a bright rounded emblem on a dark ground. Third distinct false-positive mode, unrelated to the headset one. The dashed 0.15-0.19 boxes near the ear are the headset and correctly do not count."
+    },
+    {
+      "n": 15,
+      "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__cdf7d4cd3354_1787583940396_20ce51bc.jpg",
+      "phone_present": false,
+      "verified": true,
+      "note": "No phone. The 0.53 box is on a laptop/monitor screen at the bottom edge of frame — a wide dark rectangle with bright UI on it. Fourth false-positive mode: a lit screen in a dark bezel is what the class was trained on, and nothing about the geometry says handheld."
+    },
+    {
+      "n": 16,
+      "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__e5c4906d4b43_1787191270289_14e26ca8.jpg",
+      "phone_present": true,
+      "verified": true,
+      "note": "Real phone. The second of the two true positives among the head-region frames."
+    },
+    {
+      "n": 17,
+      "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__e5c4906d4b43_1787191286933_28d762e2.jpg",
+      "phone_present": true,
+      "verified": true,
+      "note": "Real phone, held in hand. Confirmed by review."
+    },
+    {
+      "n": 18,
+      "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__e5c4906d4b43_1787191396139_61a4e94e.jpg",
+      "phone_present": true,
+      "verified": true,
+      "note": "Real phone, held in hand. Confirmed by review."
+    },
+    {
+      "n": 19,
+      "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__e5c4906d4b43_1787191421318_5659d5da.jpg",
+      "phone_present": true,
+      "verified": true,
+      "note": "Real phone, held in hand. Confirmed by review."
+    },
+    {
+      "n": 20,
+      "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__e5c4906d4b43_1787191790042_833bb734.jpg",
+      "phone_present": true,
+      "verified": true,
+      "note": "Real phone, held in hand. Confirmed by review."
+    },
+    {
+      "n": 21,
+      "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__e5c4906d4b43_1787191806545_544e9617.jpg",
+      "phone_present": true,
+      "verified": true,
+      "note": "Real phone, held in hand. Confirmed by review."
+    },
+    {
+      "n": 22,
+      "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__e5c4906d4b43_1787191819089_02ea6255.jpg",
+      "phone_present": true,
+      "verified": true,
+      "note": "Real phone, held in hand. Confirmed by review."
+    },
+    {
+      "n": 23,
+      "file": "resume_747007c471329b8a575b1639617f8edd8c5d34173c2007b3cbbb1068c4fbe5b9__e5c4906d4b43_1787191840007_10b7b70e.jpg",
+      "phone_present": true,
+      "verified": true,
+      "note": "Real phone, held in hand. Confirmed by review."
+    },
+    {
+      "n": 24,
+      "file": "resume_c8663e0836efeea37f7f17cec272bda1a5eea0ef8d49caeb25aca4a17194d58f__062f882cff8c_1787556984185_a4319f36.jpg",
+      "phone_present": true,
+      "verified": true,
+      "note": "Real phone, held in hand. Confirmed by review."
+    },
+    {
+      "n": 25,
+      "file": "resume_c8663e0836efeea37f7f17cec272bda1a5eea0ef8d49caeb25aca4a17194d58f__062f882cff8c_1787557028973_360b86a2.jpg",
+      "phone_present": true,
+      "verified": true,
+      "note": "Real phone, held in hand. Confirmed by review."
+    }
+  ]
+}

@@ -48,6 +48,81 @@ export interface SniperScopeHandle {
   stopCamera: () => void;
 }
 
+/**
+ * One YOLO detection from the prop sweep, in full-frame normalized coordinates.
+ *
+ * `source` names the pass that produced it (currently always "full") and
+ * `fired` says whether it cleared the confidence
+ * floor and so counted toward the verdict. Both are drawn on screen: a phone
+ * accusation you cannot see the box for is impossible to argue with, and
+ * knowing WHICH pass is making the claim is what separates "there is a phone"
+ * from "the magnified lower tile thinks your earpiece is a phone".
+ */
+interface PropBox {
+  label: string;
+  conf: number;
+  source: string;
+  fired: boolean;
+  box: [number, number, number, number];
+}
+
+/**
+ * How long a sweep's boxes stay painted.
+ *
+ * The overlay repaints every telemetry frame but boxes only arrive every
+ * PROP_SCAN_MS (~1.2s), so they have to be held in a ref and redrawn from it —
+ * drawing them once per sweep would show a box for one frame in twenty. The TTL
+ * is roughly two sweeps: long enough to survive a slow round trip without
+ * flickering, short enough that a box does not outlive the object by much.
+ */
+const PROP_BOX_TTL_MS = 2500;
+
+/**
+ * Paint the prop sweep's detections over the video.
+ *
+ * Coordinates arrive normalized against the full frame, so they scale to the
+ * canvas rather than assuming the 640x360 the sweep happens to send. The video
+ * is not mirrored (no scaleX(-1) on either element) and both it and this canvas
+ * are 16:9 object-cover over a 16:9 frame, so no crop correction is needed —
+ * normalized x maps straight onto canvas x.
+ */
+function drawPropBoxes(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  boxes: PropBox[],
+) {
+  for (const b of boxes) {
+    const [nx1, ny1, nx2, ny2] = b.box;
+    const x = nx1 * canvas.width;
+    const y = ny1 * canvas.height;
+    const w = (nx2 - nx1) * canvas.width;
+    const h = (ny2 - ny1) * canvas.height;
+
+    // Solid red is what accused the candidate; dashed amber was seen and NOT
+    // counted. The difference is the whole point of drawing sub-floor boxes: a
+    // dashed box on an earpiece says the detector is looking at the right pixels
+    // and drawing the wrong conclusion, which is a different bug from a box
+    // sitting on empty desk.
+    ctx.lineWidth = b.fired ? 2 : 1;
+    ctx.strokeStyle = b.fired ? "#FF3B30" : "#FFB020";
+    ctx.setLineDash(b.fired ? [] : [4, 4]);
+    ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash([]);
+
+    const label = `${b.label} ${Math.round(b.conf * 100)}% ${b.source}`;
+    ctx.font = "600 11px ui-monospace, monospace";
+    const textWidth = ctx.measureText(label).width;
+    // Flip the caption below the box when the box is near the top edge, so it
+    // is never clipped off the canvas.
+    const labelY = y > 14 ? y - 13 : y + h + 1;
+
+    ctx.fillStyle = b.fired ? "#FF3B30" : "#FFB020";
+    ctx.fillRect(x, labelY, textWidth + 6, 13);
+    ctx.fillStyle = "#000000";
+    ctx.fillText(label, x + 3, labelY + 10);
+  }
+}
+
 interface SniperScopeProps {
   onTelemetryUpdate: (packet: RiskPacket, verdict: string) => void;
   onDisengage?: () => void;
@@ -73,6 +148,15 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
+  /**
+   * Latest prop-sweep detections, with the time they landed.
+   *
+   * A ref rather than state: the overlay is drawn from the telemetry loop at
+   * frame rate, and putting boxes through setState would re-render the whole
+   * page (camera panel, transcript, chat) on every sweep for a value only the
+   * canvas reads — the same reason audioLevelRef exists in useVAD.
+   */
+  const propBoxesRef = useRef<{ at: number; boxes: PropBox[] }>({ at: 0, boxes: [] });
   const loopTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const [isScanning, setIsScanning] = useState(false);
@@ -868,12 +952,27 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
             ctx.arc(lIris.x * canvas.width, lIris.y * canvas.height, 2, 0, 2 * Math.PI);
             ctx.arc(rIris.x * canvas.width, rIris.y * canvas.height, 2, 0, 2 * Math.PI);
             ctx.fill();
+
+            if (Date.now() - propBoxesRef.current.at < PROP_BOX_TTL_MS) {
+              drawPropBoxes(ctx, canvas, propBoxesRef.current.boxes);
+            }
           }
         }
       } else {
         if (overlayRef.current) {
-          const ctx = overlayRef.current.getContext("2d");
-          if (ctx) ctx.clearRect(0, 0, overlayRef.current.width, overlayRef.current.height);
+          const canvas = overlayRef.current;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // Boxes survive the no-face branch on purpose. A candidate holding a
+            // phone below the camera, ducking out of frame, or turned fully away
+            // is exactly when MediaPipe loses the face and exactly when seeing
+            // what YOLO boxed matters most. Clearing them here would blank the
+            // overlay in the one situation it was built for.
+            if (Date.now() - propBoxesRef.current.at < PROP_BOX_TTL_MS) {
+              drawPropBoxes(ctx, canvas, propBoxesRef.current.boxes);
+            }
+          }
         }
       }
 
@@ -1265,6 +1364,13 @@ export default function SniperScope({ onTelemetryUpdate, onDisengage, onPersonaC
           });
           clearTimeout(timeoutId);
           const data = await res.json();
+
+          // Set on EVERY sweep, unlike the risk fields below, which are gated on
+          // the rising edge. The boxes are an observation, not a verdict: they
+          // must keep updating while a banner is already up (so you can watch
+          // what is holding it up) and they must go empty the moment a sweep
+          // finds nothing, or a stale box would read as a live detection.
+          propBoxesRef.current = { at: Date.now(), boxes: data.boxes ?? [] };
 
           // Only paint on a real escalation. The backend returns the rising
           // edge only, so a prop sitting in frame reports escalated=false on
