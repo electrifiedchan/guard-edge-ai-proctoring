@@ -22,6 +22,14 @@ ENV/
 *.sqlite3
 *.sqlite
 
+# SQLite's WAL-mode sidecars: -wal holds committed pages not yet folded back
+# into the main file, -shm is the shared-memory index into it. Both are
+# recreated on connect and removed on a clean close, so they are live runtime
+# state rather than source. Named explicitly because `*.db` above does not match
+# them — the extension is ".db-wal", not ".db".
+*.db-wal
+*.db-shm
+
 # ─── Next.js / Node ──────────────────────────────────────────────────────────
 node_modules/
 .next/
