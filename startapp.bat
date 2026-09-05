@@ -47,4 +47,40 @@ echo - Dashboard:          http://localhost:3000/dashboard
 echo - Dashboard (demo):   http://localhost:3000/dashboard?demo=1
 echo - Backend API:        http://localhost:8080
 echo.
+
+REM Open the landing page instead of leaving a URL to copy by hand.
+REM
+REM Poll for the port rather than sleeping a guessed number of seconds: the dev
+REM server's cold start is not a fixed cost, so a fixed wait either opens the
+REM browser onto ERR_CONNECTION_REFUSED — which puts the user right back to
+REM reloading by hand, the thing this replaces — or wastes time on a warm start.
+REM Port-bound is the right signal, not HTTP 200: Next compiles the route on the
+REM first request, so waiting for a response would mean waiting through a compile
+REM the browser can sit through itself.
+REM
+REM /C: is required on both matches. Bare `findstr "a b"` searches for a OR b,
+REM which would match any listening socket. The trailing space after :3000 is
+REM what keeps it from matching :30000.
+echo Waiting for the frontend to come up...
+set /a TRIES=0
+:wait_for_frontend
+netstat -ano | findstr /C:":3000 " | findstr /C:"LISTENING" >NUL
+if not errorlevel 1 goto frontend_up
+set /a TRIES+=1
+if %TRIES% GEQ 30 (
+    echo       ...still not listening after 60 seconds. Check the frontend window,
+    echo          then open http://localhost:3000 yourself.
+    goto browser_done
+)
+timeout /t 2 /nobreak >NUL
+goto wait_for_frontend
+
+:frontend_up
+echo       ...up. Opening your browser.
+REM The empty "" is the window title. Without it, `start` treats the URL as the
+REM title and opens nothing.
+start "" http://localhost:3000
+
+:browser_done
+echo.
 pause
