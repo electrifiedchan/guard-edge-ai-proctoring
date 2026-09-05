@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core_memory.resume_gate import (
     KIND_MARKERS,
     LINES,
+    MAX_RESUME_WORDS,
     MIN_RESUME_SIGNALS,
     STRONG_RESUME_SIGNALS,
     ResumeGate,
@@ -234,6 +235,47 @@ for kind, pool in LINES.items():
 
 print("\nthresholds stay in the order the ladder assumes:")
 check("strong is above the floor", STRONG_RESUME_SIGNALS > MIN_RESUME_SIGNALS, True)
+
+# Length. The two documents that got through the first version of this gate were
+# both long: a 3996-word paper and a 2155-word deck, each carrying enough
+# incidental resume vocabulary to earn the override that rung 1 grants.
+FILLER = "the system was evaluated under controlled conditions " * 260  # ~2100 words
+
+LONG_PAPER = f"""
+Edge-Aware Attention Estimation for Remote Assessment
+author@university.edu  -  code at github.com/lab/edge-attention
+Abstract
+{FILLER}
+In this paper we propose a two-stage estimator. Related work spans 2015 - 2021.
+Index Terms: attention, edge inference
+"""
+
+# Same length, same resume signals, but nothing identifies it as another kind.
+LONG_UNKNOWN = f"""
+Priya Menon - priya@example.com - +91 99887 76655
+Experience, 2018 - 2024
+{FILLER}
+"""
+
+print("\nlength withdraws rung 1's veto, but refuses nothing on its own:")
+check("the filler is genuinely over the ceiling", len(LONG_PAPER.split()) > MAX_RESUME_WORDS, True)
+check(
+    "a long paper has enough signals to have passed rung 1",
+    len(resume_signals(LONG_PAPER)) >= STRONG_RESUME_SIGNALS,
+    True,
+)
+check("...and is refused anyway", ResumeGate().inspect(LONG_PAPER)["kind"], "PAPER")
+check(
+    "a long document with no other identity still gets in",
+    ResumeGate().inspect(LONG_UNKNOWN),
+    None,
+)
+check(
+    "real resumes are nowhere near the ceiling",
+    max(len(t.split()) for t in (FULL_RESUME, SPARSE_RESUME, BILLING_RESUME, ACADEMIC_CV))
+    < MAX_RESUME_WORDS,
+    True,
+)
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

@@ -86,6 +86,17 @@ MIN_RESUME_SIGNALS = 2
 # out at the front door.
 STRONG_RESUME_SIGNALS = 3
 
+# A resume is short, and that is a property of the document class rather than a
+# tendency. Measured on the real PDFs sitting on this machine: three actual
+# resumes come to 129, 378 and 389 words, while the shortest non-resume is a
+# 1735-word project synopsis, a slide deck is 2155, a six-page paper is 3996 and
+# a project report is 5999. The gap is wide and empty, so the ceiling sits
+# generously inside it — three dense pages' worth — rather than anywhere near
+# the resumes, because three is a small sample and two-page resumes exist.
+#
+# This refuses nothing on its own; see the note in `inspect`.
+MAX_RESUME_WORDS = 1200
+
 # --- If it isn't a resume, what is it? -------------------------------------
 #
 # Only used to pick which joke to tell, never to accept anything. Two distinct
@@ -202,7 +213,8 @@ class ResumeGate:
 
         The ladder, in order, each rung with its own reason:
 
-          1. Strong resume     accept. Nothing overrides three independent
+          1. Short and strongly
+             resume-shaped     accept. Nothing overrides three independent
                                families plus structure.
           2. Recognised as
              something else    refuse, and name it in the joke.
@@ -213,7 +225,23 @@ class ResumeGate:
         signals = resume_signals(text)
         structural = any(name in signals for name in STRUCTURAL_SIGNALS)
 
-        if len(signals) >= STRONG_RESUME_SIGNALS and structural:
+        # Length refuses nothing by itself: a long document with resume structure
+        # and nothing else recognisable still gets in at rung 3. What being long
+        # costs a document is rung 1's veto, because the very signals that earn
+        # that veto — an author email, the word "experience", a year range in a
+        # citation — are signals a six-page technical paper carries too. Measured
+        # before this existed: a 3996-word paper scored three families and
+        # overrode its own three PAPER markers, and a 2155-word slide deck did
+        # the same. Both are now refused; both real resumes tested are ~380 words
+        # and untouched.
+        #
+        # The known cost is a genuinely long academic CV that also trips two
+        # PAPER markers, which will be refused as a paper. Accepted deliberately:
+        # this tool's users upload one- and two-page resumes, and the alternative
+        # is letting every long document in.
+        brief = len(text.split()) <= MAX_RESUME_WORDS
+
+        if brief and len(signals) >= STRONG_RESUME_SIGNALS and structural:
             return None
 
         kind = looks_like(text)
