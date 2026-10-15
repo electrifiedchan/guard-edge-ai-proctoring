@@ -1517,6 +1517,77 @@ async def get_recent_logs():
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/autopsy-logs  — Feeds the frontend /autopsy deep-dive page
+#
+# Reads sentry_logs.db/security_logs, which is the ARCHIVE written by earlier
+# builds, not the live guard_telemetry.db that /api/v1/logs serves. The two are
+# deliberately different sources: /api/v1/logs rebuilds an audit trail out of
+# the current session's telemetry frames, which carry no imagery, whereas the
+# autopsy page exists to show flagged moments *with* their evidence JPEG.
+#
+# The route itself went missing while the archive and the page that reads it
+# both survived, so /autopsy rendered "backend offline" against a healthy
+# server with 974 usable rows behind it.
+#
+# image_payload is returned verbatim: rows hold either "/api/v1/evidence/<f>"
+# (served by the StaticFiles mount above) or a legacy bare-base64 blob, and
+# resolveEvidenceSrc() in the page already handles both. Normalising here would
+# break the older form.
+# ---------------------------------------------------------------------------
+@app.get("/api/v1/autopsy-logs")
+async def get_autopsy_logs(limit: int = 60):
+    import sqlite3
+    import contextlib
+
+    db_path = os.path.join(BACKEND_DIR, "sentry_logs.db")
+    if not os.path.exists(db_path):
+        return []
+
+    # Read-only: this is an archive, and the autopsy page must never be able to
+    # mutate the historical record it is auditing.
+    with contextlib.closing(
+        sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    ) as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, candidate_id, timestamp, gaze, is_critical,
+                       risk_score, intervention_level, ai_logic_trace,
+                       image_payload
+                FROM security_logs
+                ORDER BY
+                    -- Frames that actually captured a photo are the ones worth
+                    -- autopsying; plain CLEAR rows would otherwise crowd them
+                    -- out, since they outnumber them roughly 13 to 1.
+                    CASE WHEN image_payload IS NOT NULL
+                              AND image_payload != '' THEN 0 ELSE 1 END,
+                    id DESC
+                LIMIT ?
+                """,
+                (max(1, min(limit, 500)),),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # Archive predates this schema, or the table was never created.
+            return []
+
+        return [
+            {
+                "id": r["id"],
+                "candidate_id": r["candidate_id"],
+                "timestamp": r["timestamp"],
+                "gaze": r["gaze"],
+                "is_critical": bool(r["is_critical"]),
+                "risk_score": r["risk_score"],
+                "intervention_level": r["intervention_level"],
+                "ai_logic_trace": r["ai_logic_trace"] or "",
+                "image_payload": r["image_payload"] or "",
+            }
+            for r in rows
+        ]
+
+
+# ---------------------------------------------------------------------------
 # Misc endpoints
 # ---------------------------------------------------------------------------
 @app.get("/api/v1/status/{candidate_id}")
