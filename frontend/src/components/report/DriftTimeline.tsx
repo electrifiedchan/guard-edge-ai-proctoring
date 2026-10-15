@@ -304,10 +304,16 @@ export default function DriftTimeline({
             </li>
           ))}
         </ul>
-      ) : (
+      ) : eyeContactPct >= 70 ? (
         <p className="text-[13px] text-[var(--color-slate)] leading-relaxed">
           No sustained drift. Your eyeline held the camera for the whole session —
           that is the hard part, and you did it.
+        </p>
+      ) : (
+        <p className="text-[13px] text-[var(--color-slate)] leading-relaxed">
+          No drift episodes were recorded, but only {eyeContactPct}% of frames
+          were on camera — too little signal to confirm steady focus. Check
+          lighting, camera angle, and face visibility, then run the session again.
         </p>
       )}
 
