@@ -17,15 +17,6 @@ export default function Hero() {
 
   return (
     <section className="relative min-h-screen flex items-center overflow-hidden" style={{ background: "#000" }}>
-      {/* ambient top-right key light for the whole hero */}
-      <div
-        className="pointer-events-none absolute -top-40 right-0 h-[700px] w-[700px]"
-        style={{
-          background: "radial-gradient(ellipse at 70% 20%, rgba(255,255,255,0.10) 0%, rgba(52,211,153,0.04) 35%, transparent 65%)",
-          filter: "blur(40px)",
-        }}
-      />
-
       <div className="relative z-10 mx-auto grid w-full max-w-6xl grid-cols-1 items-center gap-8 px-6 lg:grid-cols-2">
         {/* LEFT — content */}
         <motion.div
@@ -91,23 +82,32 @@ export default function Hero() {
           </motion.div>
         </motion.div>
 
-        {/* RIGHT — cube (Resend method: pure black bg, native size, no blend) */}
+        {/* RIGHT — cube (lit by the section-level corner light below) */}
         <motion.div
           initial={{ opacity: 0, scale: 0.96 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1], delay: 0.15 }}
-          className="relative flex h-[520px] items-center justify-center"
+          className="relative flex h-[420px] items-center justify-center sm:h-[580px]"
         >
+          {/* floor glow under the cube */}
+          <div
+            className="pointer-events-none absolute bottom-10 left-1/2 h-[80px] w-[380px] -translate-x-1/2 rounded-[50%]"
+            style={{
+              background: "radial-gradient(ellipse at center, rgba(255,255,255,0.06) 0%, transparent 70%)",
+              filter: "blur(18px)",
+            }}
+          />
+
           <motion.video
             src="/cube.mp4"
             autoPlay
             loop
             muted
             playsInline
-            className="h-[440px] w-[440px] object-contain"
+            className="relative h-[360px] w-[360px] object-contain sm:h-[540px] sm:w-[540px]"
             style={{
-              WebkitMaskImage: "radial-gradient(circle at center, black 55%, transparent 72%)",
-              maskImage: "radial-gradient(circle at center, black 55%, transparent 72%)",
+              WebkitMaskImage: "radial-gradient(circle at center, black 75%, transparent 100%)",
+              maskImage: "radial-gradient(circle at center, black 75%, transparent 100%)",
             }}
             animate={{ y: [0, -14, 0] }}
             transition={{ duration: 6, ease: "easeInOut", repeat: Infinity }}
@@ -133,6 +133,36 @@ export default function Hero() {
             <div className="font-mono text-base text-sky-400">12ms</div>
           </motion.div>
         </motion.div>
+      </div>
+
+      {/* corner god ray — light source off-screen top-right, sweeping down-left
+          across the cube. Screen blend lightens the video's baked black too, so
+          no dark square shows around the cube. */}
+      <div className="pointer-events-none absolute inset-0 z-20" style={{ mixBlendMode: "screen" }}>
+        <div
+          className="absolute inset-0"
+          style={{
+            background:
+              "radial-gradient(ellipse 70% 85% at 100% 0%, rgba(255,255,255,0.11) 0%, rgba(255,255,255,0.045) 35%, rgba(255,255,255,0.012) 60%, transparent 80%)",
+          }}
+        />
+        <div
+          className="absolute inset-0"
+          style={{
+            background:
+              "conic-gradient(from 195deg at 100% 0%, transparent 0deg, rgba(255,255,255,0.03) 12deg, rgba(255,255,255,0.055) 26deg, rgba(255,255,255,0.03) 40deg, transparent 55deg)",
+            WebkitMaskImage: "radial-gradient(circle at 100% 0%, black 0%, rgba(0,0,0,0.5) 40%, transparent 80%)",
+            maskImage: "radial-gradient(circle at 100% 0%, black 0%, rgba(0,0,0,0.5) 40%, transparent 80%)",
+            filter: "blur(40px)",
+          }}
+        />
+        <div
+          className="absolute -left-[10%] bottom-[18%] h-[120px] w-[120%] -rotate-[4deg]"
+          style={{
+            background: "linear-gradient(to right, transparent 5%, rgba(255,255,255,0.025) 30%, rgba(255,255,255,0.05) 60%, transparent 90%)",
+            filter: "blur(30px)",
+          }}
+        />
       </div>
 
       {/* scroll hint */}
