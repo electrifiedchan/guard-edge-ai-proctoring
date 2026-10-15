@@ -21,3 +21,21 @@ if errorlevel 1 exit /b 1
 echo.
 "%ROOT%\venv\Scripts\python.exe" test_llm_config.py
 if errorlevel 1 exit /b 1
+echo.
+"%ROOT%\venv\Scripts\python.exe" test_bea_face_confirmation.py
+if errorlevel 1 exit /b 1
+echo.
+"%ROOT%\venv\Scripts\python.exe" test_episodes.py
+if errorlevel 1 exit /b 1
+echo.
+"%ROOT%\venv\Scripts\python.exe" test_interrupt.py
+if errorlevel 1 exit /b 1
+echo.
+"%ROOT%\venv\Scripts\python.exe" test_peak_risk.py
+if errorlevel 1 exit /b 1
+echo.
+"%ROOT%\venv\Scripts\python.exe" test_resume_gate.py
+if errorlevel 1 exit /b 1
+echo.
+"%ROOT%\venv\Scripts\python.exe" test_timeline_migration.py
+if errorlevel 1 exit /b 1

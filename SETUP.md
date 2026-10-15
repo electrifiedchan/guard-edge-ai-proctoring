@@ -227,9 +227,10 @@ for a few seconds, then it is fast.
 backend\run_tests.bat
 ```
 
-Runs six suites against the project venv: session lifecycle, dashboard summary,
-brevity, verdict narration, persona contract, and LLM config. It stops at the
-first failure.
+Runs twelve suites against the project venv: session lifecycle, dashboard
+summary, brevity, verdict narration, persona contract, LLM config, BEA face
+confirmation, episodes, interrupt, peak risk, resume gate, and timeline
+migration. It stops at the first failure.
 
 `backend/test_llm_config.py` is hermetic — it fakes the Ollama socket, so it is
 a real check that the config layer works on this machine with no server up.
