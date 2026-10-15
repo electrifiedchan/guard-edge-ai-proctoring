@@ -83,7 +83,11 @@ export default function AutopsyPage() {
         </p>
         <div className="flex flex-wrap gap-3 mt-6 text-[11px] text-[var(--color-slate)]">
           <span className="rounded-md border border-[var(--color-hairline)] bg-[var(--color-surface)] px-2.5 py-1">TOTAL VIOLATIONS: <span className="text-[var(--color-danger)] font-bold">{logs.length}</span></span>
-          <span className="rounded-md border border-[var(--color-hairline)] bg-[var(--color-surface)] px-2.5 py-1">ENGINE: <span className="text-[var(--color-parchment)]">YOLOv8n + LLAMA 3.1</span></span>
+          {/* YOLOv8s, not 8n: edge_main.py loads yolov8s.pt. The label read
+              "YOLOv8n" while the backend had been on the s weights since the
+              0.35 confidence-floor tuning, so the page was reporting a model
+              the system does not run. */}
+          <span className="rounded-md border border-[var(--color-hairline)] bg-[var(--color-surface)] px-2.5 py-1">ENGINE: <span className="text-[var(--color-parchment)]">YOLOv8s + Llama 3.1</span></span>
           <span className="rounded-md border border-[var(--color-hairline)] bg-[var(--color-surface)] px-2.5 py-1">DATABASE: <span className="text-[var(--color-parchment)]">SQLite3 / sentry_logs.db</span></span>
         </div>
       </header>
